@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.never-dark *));
+:root {
+  color-scheme: light;
+}
+
+.ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
