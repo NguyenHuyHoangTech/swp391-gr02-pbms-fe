@@ -1,5 +1,5 @@
 /**
- * @Author: Antigravity
+ * @Author: Thái Tân Phú 
  * @Date: 2026-07-05
  * @Description: Main layout wrapper for the Customer portal. Includes top navigation header, responsive mobile drawer, and footer.
  * @Dependencies: 
