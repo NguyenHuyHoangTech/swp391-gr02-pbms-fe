@@ -99,10 +99,6 @@ export const MyParkingScreen = () => {
     { id: 6, name: '6 Months', discount: 0.10 },
     { id: 12, name: '12 Months', discount: 0.15 },
   ];
-  const VEHICLES = [
-    { id: 'CAR', name: 'Car', pricePerMonth: 1000000 },
-    { id: 'MOTORBIKE', name: 'Motorbike', pricePerMonth: 150000 }
-  ];
   const GATEWAYS = [
     { id: 'PAYPAL', name: 'PayPal', icon: '/paypal_logo.webp' },
     { id: 'PAYOS', name: 'PayOS (VietQR)', icon: getImageUrl('/uploads/PayOS_Icon.webp') }
