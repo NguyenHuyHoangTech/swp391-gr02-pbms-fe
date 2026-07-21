@@ -25,9 +25,9 @@ const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'
 
 const RevenueDashboardScreen: React.FC = () => {
   // State for Global Control Panel
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([simulatedDayjs().subtract(7, 'days'), simulatedDayjs()]);
+  const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([simulatedDayjs().subtract(60, 'days'), simulatedDayjs()]);
   const [appliedDateRange, setAppliedDateRange] = useState<[string, string]>([
-    simulatedDayjs().subtract(7, 'days').format('YYYY-MM-DD'),
+    simulatedDayjs().subtract(60, 'days').format('YYYY-MM-DD'),
     simulatedDayjs().format('YYYY-MM-DD')
   ]);
   const [calendarDates, setCalendarDates] = useState<any>(null);
@@ -37,10 +37,13 @@ const RevenueDashboardScreen: React.FC = () => {
   
   const [shiftPage, setShiftPage] = useState(1);
   const [shiftSize, setShiftSize] = useState(10);
-
+  const [shiftGateType, setShiftGateType] = useState<string>('');
+ 
   /**
-   * [1] Fetch Master Dataset for Charts & KPIs
-   * Retrieves aggregated data (summed by date, vehicle type, gate, etc.)
+   * [FE_FN_001] Hàm lấy dữ liệu Tổng quan Doanh thu (Master Dataset) từ Backend.
+   * - API Endpoint: GET /api/v1/finance/revenue/dashboard
+   * - Chức năng: Gọi API lấy dữ liệu doanh thu tổng hợp không phân trang cho khoảng thời gian được chọn 
+   *   (startDate, endDate) để dựng biểu đồ doanh thu theo ngày và các biểu đồ cơ cấu doanh thu.
    */
   const { data: masterData = [], isLoading: isChartsLoading } = useQuery({
     queryKey: ['revenue-dashboard', appliedDateRange],
@@ -51,8 +54,10 @@ const RevenueDashboardScreen: React.FC = () => {
   });
 
   /**
-   * [2] Fetch Paginated Dataset for the General Details Table
-   * Backend returns Page<RevenueRecordDTO> for heavy data slicing.
+   * [FE_FN_002] Hàm lấy danh sách giao dịch doanh thu phân trang (Paginated Data) từ Backend.
+   * - API Endpoint: GET /api/v1/finance/revenue/table
+   * - Chức năng: Lấy dữ liệu danh sách doanh thu chi tiết có phân trang (Server-side) gồm: 
+   *   tiền vé, tiền lố giờ, tiền phạt, cổng ra, biển số xe, phương thức thanh toán, v.v.
    */
   const { data: tableData, isLoading: isTableLoading } = useQuery({
     queryKey: ['revenue-table', appliedDateRange, currentPage, pageSize],
@@ -63,18 +68,28 @@ const RevenueDashboardScreen: React.FC = () => {
   });
 
   /**
-   * [3] Fetch Shift Reconciliation Data
-   * Lists expected vs actual revenue collected by staff per shift.
+   * [FE_FN_003] Hàm lấy dữ liệu lịch sử đối soát ca trực (Shift Reconciliation) của nhân viên.
+   * - API Endpoint: GET /api/v1/identity/work-sessions/history
+   * - Chức năng: Lấy lịch sử phiên làm việc của nhân viên trực cổng gồm: doanh thu thực tế khai báo, 
+   *   doanh thu hệ thống tính toán (Tiền mặt, Khác), độ lệch chênh lệch và trạng thái đối soát.
    */
   const { data: shiftHistoryData, isLoading: isShiftLoading } = useQuery({
-    queryKey: ['shift-revenue-history', appliedDateRange, shiftPage, shiftSize],
+    queryKey: ['shift-revenue-history', appliedDateRange, shiftPage, shiftSize, shiftGateType],
     queryFn: async () => {
-      const res = await axiosClient.get(`/identity/work-sessions/history?startDate=${appliedDateRange[0]}&endDate=${appliedDateRange[1]}&page=${shiftPage - 1}&size=${shiftSize}`);
+      let url = `/identity/work-sessions/history?startDate=${appliedDateRange[0]}&endDate=${appliedDateRange[1]}&page=${shiftPage - 1}&size=${shiftSize}`;
+      if (shiftGateType) {
+        url += `&gateType=${shiftGateType}`;
+      }
+      const res = await axiosClient.get(url);
       return res.data.data;
     }
   });
 
-  // Calculate Previous Date Range
+  /**
+   * [FE_FN_004] Hàm tính toán khoảng thời gian so sánh ở chu kỳ trước (Previous Date Range).
+   * - Chức năng: Dựa trên khoảng thời gian đang được chọn, tính lùi lại một khoảng thời gian có số ngày tương đương 
+   *   để làm mốc so sánh tăng trưởng doanh thu và số lượng giao dịch.
+   */
   const previousDateRange = useMemo(() => {
     const start = dayjs(appliedDateRange[0]);
     const end = dayjs(appliedDateRange[1]);
@@ -84,7 +99,11 @@ const RevenueDashboardScreen: React.FC = () => {
     return [prevStart, prevEnd];
   }, [appliedDateRange]);
 
-  // Fetch Previous Master Dataset for Growth Calculation
+  /**
+   * [FE_FN_005] Hàm lấy dữ liệu doanh thu của chu kỳ trước đó từ Backend.
+   * - API Endpoint: GET /api/v1/finance/revenue/dashboard
+   * - Chức năng: Lấy dữ liệu Master của khoảng thời gian chu kỳ trước đó để tính toán tỷ lệ tăng trưởng doanh thu.
+   */
   const { data: previousMasterData = [] } = useQuery({
     queryKey: ['revenue-dashboard-previous', previousDateRange],
     queryFn: async () => {
@@ -93,7 +112,10 @@ const RevenueDashboardScreen: React.FC = () => {
     }
   });
 
-  // Calculate KPIs
+  /**
+   * [FE_FN_006] Hàm tính toán các chỉ số KPI hiện tại (Tổng doanh thu, Tổng số lượt giao dịch).
+   * - Chức năng: Duyệt qua masterData của chu kỳ hiện tại để tính tổng cộng doanh thu và tổng số lượt xe.
+   */
   const kpis = useMemo(() => {
     return masterData.reduce((acc, curr) => {
       acc.totalRevenue += curr.totalRevenue;
@@ -102,6 +124,10 @@ const RevenueDashboardScreen: React.FC = () => {
     }, { totalRevenue: 0, totalTransactions: 0 });
   }, [masterData]);
 
+  /**
+   * [FE_FN_007] Hàm tính toán các chỉ số KPI chu kỳ trước (Tổng doanh thu, Tổng số giao dịch).
+   * - Chức năng: Duyệt qua previousMasterData của chu kỳ trước để tính tổng doanh thu và tổng số xe.
+   */
   const prevKpis = useMemo(() => {
     return previousMasterData.reduce((acc, curr) => {
       acc.totalRevenue += curr.totalRevenue;
@@ -110,6 +136,11 @@ const RevenueDashboardScreen: React.FC = () => {
     }, { totalRevenue: 0, totalTransactions: 0 });
   }, [previousMasterData]);
 
+  /**
+   * [FE_FN_008] Hàm tính toán tỷ lệ tăng trưởng phần trăm (Growth Calculation).
+   * - Chức năng: So sánh chỉ số KPI hiện tại với chu kỳ trước để tính ra tỷ lệ tăng trưởng âm/dương 
+   *   cho doanh thu và số lượng giao dịch.
+   */
   const growth = useMemo(() => {
     const revGrowth = prevKpis.totalRevenue === 0 
         ? (kpis.totalRevenue > 0 ? 100 : 0) 
@@ -122,9 +153,16 @@ const RevenueDashboardScreen: React.FC = () => {
     return { revGrowth, transGrowth };
   }, [kpis, prevKpis]);
 
+  /**
+   * [FE_FN_009] Chỉ số doanh thu trung bình trên mỗi giao dịch (ARPU - Average Revenue Per Unit).
+   */
   const arpu = kpis.totalTransactions > 0 ? kpis.totalRevenue / kpis.totalTransactions : 0;
 
-  // Process data for Hero Chart (Group by Date)
+  /**
+   * [FE_FN_010] Hàm xử lý dữ liệu cho Biểu đồ chính theo thời gian (Hero Chart - Revenue Over Time).
+   * - Chức năng: Nhóm tổng doanh thu theo từng ngày trong khoảng thời gian được chọn và điền giá trị 0 
+   *   cho những ngày không có giao dịch nhằm hiển thị biểu đồ cột liên tục.
+   */
   const heroChartData = useMemo(() => {
     const start = dayjs(appliedDateRange[0]);
     const end = dayjs(appliedDateRange[1]);
@@ -146,7 +184,11 @@ const RevenueDashboardScreen: React.FC = () => {
     return Array.from(map.entries()).map(([date, total]) => ({ date, total })).sort((a, b) => a.date.localeCompare(b.date));
   }, [masterData, appliedDateRange]);
 
-  // Helper for Pie Charts
+  /**
+   * [FE_FN_011] Hàm helper xử lý dữ liệu cho biểu đồ tròn (Pie Charts - Revenue Structure).
+   * - Chức năng: Nhóm tổng doanh thu theo thuộc tính chỉ định (paymentMethod, revenueSource, hoặc vehicleType) 
+   *   để phục vụ việc vẽ các biểu đồ cơ cấu doanh thu.
+   */
   const processPieData = (key: keyof RevenueRecord) => {
     const map = new Map<string, number>();
     masterData.forEach(r => {
@@ -160,13 +202,20 @@ const RevenueDashboardScreen: React.FC = () => {
   const sourceData = useMemo(() => processPieData('revenueSource'), [masterData]);
   const vehicleData = useMemo(() => processPieData('vehicleType'), [masterData]);
 
-  // Export CSV
+  /**
+   * [FE_FN_012] Hàm xuất dữ liệu báo cáo doanh thu ra tệp CSV/Excel.
+   * - API Endpoint: GET /api/v1/finance/revenue/export
+   * - Chức năng: Kích hoạt tải xuống file CSV chứa toàn bộ dữ liệu giao dịch chi tiết theo khoảng thời gian được chọn.
+   */
   const handleExportCSV = () => {
     // Call separate export API that streams file directly
     window.open(`http://localhost:8080/api/v1/finance/revenue/export?startDate=${appliedDateRange[0]}&endDate=${appliedDateRange[1]}`, '_blank');
   };
 
-  // Custom Tooltip for Currency
+  /**
+   * [FE_FN_013] Component Tooltip tùy chỉnh hiển thị tiền tệ (VND) trên biểu đồ Recharts.
+   * - Chức năng: Định dạng và hiển thị thông tin doanh thu bằng tiền tệ Việt Nam Đồng (₫) khi rê chuột vào các cột biểu đồ.
+   */
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       return (
@@ -353,6 +402,25 @@ const RevenueDashboardScreen: React.FC = () => {
       <Card 
         className="shadow-sm border-slate-200 rounded-xl mb-6"
         title={<span><SafetyCertificateOutlined className="mr-2 text-blue-600" /> Shift Reconciliation</span>}
+        extra={
+          <Space>
+            <Text type="secondary">Gate Status:</Text>
+            <select 
+              className="border border-gray-300 rounded px-2 py-1 outline-none text-sm"
+              value={shiftGateType}
+              onChange={(e) => {
+                setShiftGateType(e.target.value);
+                setShiftPage(1);
+              }}
+            >
+              <option value="">All</option>
+              <option value="ENTRY">ENTRY</option>
+              <option value="EXIT">EXIT</option>
+              <option value="ENTRY_EXIT">ENTRY_EXIT</option>
+              <option value="PATROL">PATROL</option>
+            </select>
+          </Space>
+        }
       >
         <Table
             dataSource={shiftHistoryData?.content || []}
@@ -376,6 +444,16 @@ const RevenueDashboardScreen: React.FC = () => {
             <Table.Column title="Staff" dataIndex="staffName" width={180} render={(val) => <strong className="text-blue-700">{val}</strong>} />
             <Table.Column title="Gate" dataIndex="gateName" width={150} />
             <Table.Column 
+              title="Gate Status" 
+              dataIndex="gateType" 
+              width={120} 
+              render={(val) => {
+                if (val === 'ENTRY') return <span className="text-blue-600 font-medium">ENTRY</span>;
+                if (val === 'EXIT') return <span className="text-green-600 font-medium">EXIT</span>;
+                return <span className="text-gray-600 font-medium">{val}</span>;
+              }} 
+            />
+            <Table.Column 
               title="Working time" 
               key="time" 
               width={250}
@@ -391,36 +469,35 @@ const RevenueDashboardScreen: React.FC = () => {
               dataIndex="expectedRevenue" 
               width={130}
               align="right"
-              render={(val, record: any) => record.gateType === 'PATROL' ? '-' : val != null ? val.toLocaleString() : '-'} 
+              render={(val) => val != null ? val.toLocaleString() : '-'} 
             />
             <Table.Column 
               title="System Cash" 
               dataIndex="expectedCashRevenue" 
               width={130}
               align="right"
-              render={(val, record: any) => record.gateType === 'PATROL' ? '-' : val != null ? <span className="text-orange-600">{val.toLocaleString()}</span> : '-'} 
+              render={(val) => val != null ? <span className="text-orange-600">{val.toLocaleString()}</span> : '-'} 
             />
             <Table.Column 
               title="System Other" 
               dataIndex="expectedOtherRevenue" 
               width={130}
               align="right"
-              render={(val, record: any) => record.gateType === 'PATROL' ? '-' : val != null ? <span className="text-purple-600">{val.toLocaleString()}</span> : '-'} 
+              render={(val) => val != null ? <span className="text-purple-600">{val.toLocaleString()}</span> : '-'} 
             />
             <Table.Column 
-              title="Net revenue (VND)" 
+              title="Declared Cash (VND)" 
               dataIndex="actualRevenue" 
               width={150}
               align="right"
-              render={(val, record: any) => record.gateType === 'PATROL' ? '-' : val != null ? <strong className="text-gray-800">{val.toLocaleString()}</strong> : '-'} 
+              render={(val) => val != null ? <strong className="text-gray-800">{val.toLocaleString()}</strong> : '-'} 
             />
             <Table.Column 
               title="Difference" 
               dataIndex="revenueVariance" 
               width={150}
               align="right"
-              render={(val, record: any) => {
-                if (record.gateType === 'PATROL') return '-';
+              render={(val) => {
                 if (val == null) return '-';
                 if (val === 0) return <span className="text-gray-400">0</span>;
                 return <strong className={val > 0 ? 'text-blue-600' : 'text-red-600'}>{val > 0 ? '+' : ''}{val.toLocaleString()}</strong>;
@@ -431,8 +508,7 @@ const RevenueDashboardScreen: React.FC = () => {
               dataIndex="discrepancyStatus" 
               width={120}
               align="center"
-              render={(val, record: any) => {
-                if (record.gateType === 'PATROL') return <span className="text-gray-400 italic">Not Applicable</span>;
+              render={(val) => {
                 if (val === 'MATCH') return <span className="text-green-600 border border-green-600 px-2 py-1 rounded text-xs">Match</span>;
                 if (val === 'SHORT') return <span className="text-red-600 border border-red-600 px-2 py-1 rounded text-xs">Short</span>;
                 if (val === 'OVER') return <span className="text-blue-600 border border-blue-600 px-2 py-1 rounded text-xs">Over</span>;
@@ -479,18 +555,20 @@ const RevenueDashboardScreen: React.FC = () => {
           bordered
           size="middle"
         >
-          <Table.Column title="Date" dataIndex="date" render={(_, r: any) => <strong>{dayjs(r.date).format('DD/MM/YYYY')}</strong>} />
-          <Table.Column title="Vehicle Type" dataIndex="vehicleType" />
-          <Table.Column title="Gate" dataIndex="gateName" render={(val) => <span className="text-gray-600 font-medium">{val || 'N/A'}</span>} />
-          <Table.Column title="Revenue Source" dataIndex="revenueSource" />
-          <Table.Column title="Method" dataIndex="paymentMethod" />
+          <Table.Column title="Ngày giờ ra" dataIndex="checkoutTime" render={(val) => <strong>{dayjs(val).format('DD/MM/YYYY HH:mm')}</strong>} />
+          <Table.Column title="Biển số" dataIndex="plate" render={(val) => <span className="font-semibold text-slate-800">{val || 'N/A'}</span>} />
+          <Table.Column title="Loại xe" dataIndex="vehicleType" />
+          <Table.Column title="Cổng ra" dataIndex="gateName" render={(val) => <span className="text-gray-600 font-medium">{val || 'N/A'}</span>} />
+          <Table.Column title="Tiền vé" dataIndex="baseFee" align="right" render={(val) => <span>{val?.toLocaleString()} ₫</span>} />
+          <Table.Column title="Tiền lố giờ" dataIndex="overtimeFee" align="right" render={(val) => <span>{val?.toLocaleString()} ₫</span>} />
+          <Table.Column title="Tiền phạt" dataIndex="penaltyFee" align="right" render={(val) => <span>{val?.toLocaleString()} ₫</span>} />
           <Table.Column 
-            title="Total Revenue" 
-            dataIndex="totalRevenue" 
+            title="Tổng thu" 
+            dataIndex="totalFee" 
             align="right"
             render={(val) => <span className="font-bold text-blue-600">{val?.toLocaleString()} ₫</span>}
           />
-          <Table.Column title="Total Transactions" dataIndex="totalTransactions" align="center" />
+          <Table.Column title="Thanh toán" dataIndex="paymentMethod" align="center" />
         </Table>
           </Card>
     </div>
