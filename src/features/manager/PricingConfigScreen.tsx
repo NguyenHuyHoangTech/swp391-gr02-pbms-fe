@@ -52,8 +52,6 @@ interface VehicleConfig {
   globalBaseGuardEnabled: boolean;
   globalBaseGuardTime: number;
   globalBaseGuardPrice: number;
-  globalMaxCapEnabled: boolean;
-  globalMaxCapPrice: number | null;
   monthlyRate: number;
   shifts: Shift[];
 }
@@ -76,8 +74,6 @@ export const PricingConfigScreen = () => {
     globalBaseGuardEnabled: false,
     globalBaseGuardTime: 0,
     globalBaseGuardPrice: 0,
-    globalMaxCapEnabled: false,
-    globalMaxCapPrice: null,
     monthlyRate: 0,
     shifts: [{
       id: `shift_${Date.now()}`,
@@ -132,8 +128,6 @@ export const PricingConfigScreen = () => {
           globalBaseGuardEnabled: policy.globalBaseMins > 0,
           globalBaseGuardTime: policy.globalBaseMins,
           globalBaseGuardPrice: policy.globalBaseFee,
-          globalMaxCapEnabled: policy.maxParkingCap < 999999999,
-          globalMaxCapPrice: policy.maxParkingCap < 999999999 ? policy.maxParkingCap : undefined,
           monthlyRate: policy.monthlyRate || 0,
           shifts: policy.shifts.map((s: any, idx: number) => {
             const slices: Slice[] = s.blocks.map((b: any, bIdx: number) => {
@@ -238,7 +232,6 @@ export const PricingConfigScreen = () => {
       vehicleTypeId: activeTabId,
       globalBaseMins: config.globalBaseGuardEnabled ? config.globalBaseGuardTime : 0,
       globalBaseFee: config.globalBaseGuardEnabled ? config.globalBaseGuardPrice : 0,
-      maxParkingCap: config.globalMaxCapEnabled ? (config.globalMaxCapPrice || 0) : 999999999,
       monthlyRate: config.monthlyRate,
       status: 'ACTIVE',
       shifts: config.shifts.map(s => {
@@ -297,7 +290,6 @@ export const PricingConfigScreen = () => {
         vehicleTypeId: activeTabId,
         globalBaseMins: config.globalBaseGuardEnabled ? config.globalBaseGuardTime : 0,
         globalBaseFee: config.globalBaseGuardEnabled ? config.globalBaseGuardPrice : 0,
-        maxParkingCap: config.globalMaxCapEnabled ? (config.globalMaxCapPrice || 0) : 999999999,
         monthlyRate: config.monthlyRate,
         status: 'ACTIVE',
         shifts: config.shifts.map(s => {
@@ -807,17 +799,6 @@ export const PricingConfigScreen = () => {
                       <label className="text-xs text-gray-500 block mb-1 font-medium">Price (VND)</label>
                       <InputNumber disabled={!config.globalBaseGuardEnabled} className="w-full font-mono text-green-600" value={config.globalBaseGuardPrice} onChange={v => updateConfig('globalBaseGuardPrice', v || 0)} formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} />
                     </div>
-                  </div>
-                </div>
-
-                <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                  <div className="flex justify-between items-center mb-3">
-                    <span className="text-gray-700 font-semibold text-sm">Maximum Save Yard Price</span>
-                    <Switch checked={config.globalMaxCapEnabled} onChange={v => updateConfig('globalMaxCapEnabled', v)} />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500 block mb-1 font-medium">Maximum fee per trip (VND)</label>
-                    <InputNumber disabled={!config.globalMaxCapEnabled} className="w-full font-mono text-orange-600" placeholder="VD: 150000" value={config.globalMaxCapPrice} onChange={v => updateConfig('globalMaxCapPrice', v)} formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} />
                   </div>
                 </div>
               </div>
