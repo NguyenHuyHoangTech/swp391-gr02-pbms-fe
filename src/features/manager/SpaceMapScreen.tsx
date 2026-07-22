@@ -909,3 +909,522 @@ export const SpaceMapScreen = () => {
   const activeGate = selectedEntity?.type === 'GATE' ? gates.find(g => g.id === (selectedEntity as any).id) : null;
   const validVehicleTypes = vehicleTypes.filter(v => v.category === activeFloor?.type);
 
+  return (
+    <div className="flex h-full w-full bg-slate-50 overflow-hidden font-sans">
+
+      <div className="flex-1 relative cursor-grab active:cursor-grabbing bg-gray-200" ref={containerRef}>
+        {containerSize.width > 0 && containerSize.height > 0 && (
+          <Stage
+            width={containerSize.width}
+            height={containerSize.height}
+            draggable
+            scaleX={stageScale}
+            scaleY={stageScale}
+            x={stagePos.x}
+            y={stagePos.y}
+            onWheel={(e) => {
+              e.evt.preventDefault();
+              const scaleBy = 1.05;
+              const stage = e.target.getStage();
+              if(!stage) return;
+              const oldScale = stage.scaleX();
+              const pointer = stage.getPointerPosition();
+              if(!pointer) return;
+
+              const mousePointTo = {
+                x: (pointer.x - stage.x()) / oldScale,
+                y: (pointer.y - stage.y()) / oldScale,
+              };
+
+              let newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
+              newScale = Math.max(defaultScale, Math.min(newScale, 5));
+
+              setStageScale(newScale);
+              setStagePos({
+                x: pointer.x - mousePointTo.x * newScale,
+                y: pointer.y - mousePointTo.y * newScale,
+              });
+            }}
+            ref={stageRef}
+            onClick={(e) => {
+              if (e.target === e.target.getStage() || e.target.name() === 'bg') {
+                setSelectedEntity(null);
+              }
+            }}
+          >
+            <Layer>
+              {drawGrid()}
+            </Layer>
+
+            <Layer>
+              {visibleZones.map((zone) => {
+                const { width: slotW, height: slotH } = getVehicleDimensions(zone.vehicleTypeId, vehicleTypes);
+                const isZoneSelected = selectedEntity?.type === 'ZONE' && (selectedEntity as any).id === zone.id;
+                const isSlotSelectedInZone = selectedEntity?.type === 'SLOT' && selectedEntity.zoneId === zone.id;
+                const isSelected = isZoneSelected || isSlotSelectedInZone;
+
+                const zoneW = zone.capacity * slotW;
+                const zoneH = slotH;
+
+                return (
+                  <Group
+                    key={`zone-${zone.id}`}
+                    name="zoneGroup"
+                    x={zone.layoutX}
+                    y={zone.layoutY}
+                    rotation={zone.rotation}
+                    draggable
+                    onDragMove={(e) => handleDragMove(e, zone.id, true)}
+                    onDragEnd={(e) => handleDragEnd(e, zone.id, true)}
+                  >
+                    <Rect
+                      width={zoneW} height={zoneH}
+                      fill={isZoneSelected ? 'rgba(59, 130, 246, 0.15)' : (zone.functionType === 'WALK_IN' ? 'rgba(186, 230, 253, 0.4)' : zone.functionType === 'MONTHLY' ? 'rgba(167, 243, 208, 0.4)' : 'rgba(241, 245, 249, 0.6)')}
+                      stroke={collidingNodeId === String(zone.id) ? '#ef4444' : (isZoneSelected ? '#3b82f6' : '#64748b')}
+                      strokeWidth={isZoneSelected ? 3 : 2}
+                      dash={collidingNodeId === String(zone.id) ? [10, 5] : []}
+                      onClick={(e) => { e.cancelBubble = true; setSelectedEntity({ type: 'ZONE', id: zone.id }); if(!expandedKeys.includes('2')) setExpandedKeys(p => [...p, '2']); }}
+                      onTap={(e) => { e.cancelBubble = true; setSelectedEntity({ type: 'ZONE', id: zone.id }); }}
+                    />
+
+                    {zone.slots.map((slot, i) => {
+                      const xPos = i * slotW;
+                      const isThisSlotSelected = selectedEntity?.type === 'SLOT' && selectedEntity.slotId === slot.id;
+
+                      let slotFill = 'transparent';
+                      if (slot.status === 'OCCUPIED') slotFill = '#fecaca';
+                      else if (slot.status === 'DISABLED') slotFill = '#f1f5f9';
+                      else if (slot.status === 'EMPTY' && isThisSlotSelected) slotFill = '#eff6ff';
+                      else slotFill = 'transparent';
+
+                      let vtIconUrl = '';
+                      if (vehicleTypes) {
+                        const zoneVt = vehicleTypes.find((v: any) => v.id === zone.vehicleTypeId);
+                        if (zoneVt?.iconUrl) vtIconUrl = getImageUrl(zoneVt.iconUrl);
+                      }
+
+                      return (
+                        <Group
+                          key={slot.id}
+                          x={xPos}
+                          y={0}
+                          onClick={(e) => {
+                            e.cancelBubble = true;
+                            if (isZoneSelected) {
+                              setSelectedEntity({ type: 'SLOT', zoneId: zone.id, slotId: slot.id });
+                              if(!expandedKeys.includes('3')) setExpandedKeys(p => [...p, '3']);
+                            } else {
+                              setSelectedEntity({ type: 'ZONE', id: zone.id });
+                              if(!expandedKeys.includes('2')) setExpandedKeys(p => [...p, '2']);
+                            }
+                          }}
+                        >
+                          <Rect
+                            width={slotW} height={slotH}
+                            fill={slotFill}
+                            stroke={isThisSlotSelected ? '#2563eb' : '#94a3b8'}
+                            strokeWidth={isThisSlotSelected ? 3 : 2}
+                          />
+                          {slot.status === 'DISABLED' && (
+                            <Line points={[0, 0, slotW, slotH]} stroke="#cbd5e1" strokeWidth={2} listening={false} />
+                          )}
+
+                          <KonvaText
+                            x={0} y={slot.status === 'OCCUPIED' ? slotH / 2 + 5 : slotH / 2 - 8}
+                            width={slotW}
+                            align="center"
+                            text={slot.name}
+                            fontSize={16}
+                            fill={slot.status === 'DISABLED' ? '#94a3b8' : '#334155'}
+                            fontStyle="bold"
+                            listening={false}
+                          />
+                          {slot.status === 'OCCUPIED' && (
+                            vtIconUrl ? (
+                              <URLImage src={vtIconUrl} x={slotW / 2 - 16} y={slotH / 2 - 25} width={32} height={32} />
+                            ) : (
+                              <KonvaText
+                                x={0} y={slotH / 2 - 25}
+                                width={slotW}
+                                align="center"
+                                text="🚗"
+                                fontSize={28}
+                                listening={false}
+                              />
+                            )
+                          )}
+                          {slot.status === 'OCCUPIED' && slot.plate && (
+                            <KonvaText
+                              x={0} y={slotH / 2 + 22}
+                              width={slotW}
+                              align="center"
+                              text={slot.plate}
+                              fontSize={12}
+                              fill="#ef4444"
+                              fontStyle="bold"
+                              listening={false}
+                            />
+                          )}
+                        </Group>
+                      );
+                    })}
+
+                    <Label x={5} y={5} listening={false}>
+                      <Tag fill="rgba(255, 255, 255, 0.95)" cornerRadius={6} shadowColor="black" shadowBlur={4} shadowOpacity={0.15} shadowOffset={{x:0, y:2}} />
+                      <KonvaText
+                        text={`${zone.name} ${zone.activeReservationsCount ? `(Res: ${zone.activeReservationsCount})` : ''}`}
+                        fontSize={18}
+                        fontFamily="sans-serif"
+                        fill={isSelected ? '#2563eb' : '#0f172a'}
+                        fontStyle="bold"
+                        padding={6}
+                      />
+                    </Label>
+                  </Group>
+                );
+              })}
+
+              {visibleGates.map((gate) => {
+                let gateW = 3 * GRID_SIZE;
+                const gateH = GRID_SIZE;
+                if (gate.vehicleTypeId) {
+                  const vt = vehicleTypes.find(v => v.id === gate.vehicleTypeId);
+                  if (vt) gateW = vt.matrixWidth * GRID_SIZE;
+                }
+                const isSelected = selectedEntity?.type === 'GATE' && (selectedEntity as any).id === gate.id;
+                const gateColor = gate.status === 'ACTIVE' ? '#059669' : '#94a3b8';
+
+                return (
+                  <Group
+                    key={`gate-${gate.id}`}
+                    name="gateGroup"
+                    x={gate.layoutX}
+                    y={gate.layoutY}
+                    rotation={gate.rotation}
+                    draggable
+                    onDragMove={(e) => handleDragMove(e, gate.id, false)}
+                    onDragEnd={(e) => handleDragEnd(e, gate.id, false)}
+                    onClick={(e) => {
+                      e.cancelBubble = true;
+                      setSelectedEntity({ type: 'GATE', id: gate.id });
+                      if(!expandedKeys.includes('4')) setExpandedKeys(p => [...p, '4']);
+                    }}
+                  >
+                    <Rect
+                      width={gateW} height={gateH}
+                      fill={gateColor}
+                      stroke={collidingNodeId === String(gate.id) ? '#ef4444' : (isSelected ? '#facc15' : '#047857')}
+                      dash={collidingNodeId === String(gate.id) ? [10, 5] : []}
+                      strokeWidth={isSelected ? 4 : 2}
+                      cornerRadius={6}
+                      shadowColor="black"
+                      shadowBlur={6}
+                      shadowOpacity={0.3}
+                      shadowOffset={{x: 0, y: 3}}
+                    />
+                    <KonvaText
+                      x={0} y={gateH / 2 - 6}
+                      width={gateW}
+                      align="center"
+                      text={`[GATE] ${gate.name}`}
+                      fontSize={14}
+                      fontStyle="bold"
+                      fill="#ffffff"
+                      listening={false}
+                    />
+                    {gate.pendingCommand && (
+                       <KonvaText x={0} y={-15} text="⚠️ PENDING" fill="#ef4444" fontSize={12} fontStyle="bold" listening={false} />
+                    )}
+                  </Group>
+                );
+              })}
+            </Layer>
+          </Stage>
+        )}
+      </div>
+
+      <div className="w-80 border-l border-gray-200 bg-white flex flex-col h-full shadow-[-4px_0_15px_rgba(0,0,0,0.05)] z-10 shrink-0">
+
+        <div className="px-4 py-3 border-b border-gray-100 bg-slate-50 flex items-center justify-between shrink-0">
+          <Title level={5} className="m-0 text-slate-800 flex items-center">
+            <CompassOutlined className="mr-2 text-blue-600" />  Configuration Bar
+                                </Title>
+        </div>
+
+        <div className="flex-1 overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-track]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-gray-400">
+          <Collapse
+            ghost
+            expandIconPosition="end"
+            activeKey={expandedKeys}
+            onChange={(keys) => setExpandedKeys(keys as string[])}
+            className="bg-white"
+          >
+            <Panel header={<Text strong>0. Vision & Navigation</Text>} key="0" className="border-b border-gray-100">
+              <Button size="small" block icon={<AimOutlined />} className="mb-3" onClick={() => handleZoomToBox(0, 0, mapCols*GRID_SIZE, mapRows*GRID_SIZE)}>
+
+                                              Panoramic Zoom
+                                            </Button>
+              <Text type="secondary" className="text-xs mb-1 block">Go to Zone:</Text>
+              <Select
+                size="small"
+                className="w-full"
+                placeholder="Select Zone"
+                onChange={handleZoomZone}
+                value={selectedEntity?.type === 'ZONE' ? (selectedEntity as any).id : undefined}
+              >
+                {visibleZones.map(z => <Select.Option key={z.id} value={z.id}>{z.name}</Select.Option>)}
+              </Select>
+            </Panel>
+
+            <Panel header={<Text strong>1. Management Floor (Floor)</Text>} key="1" className="border-b border-gray-100 bg-slate-50/50">
+              <div className="space-y-3">
+                <div className="flex items-center space-x-2">
+                  <Select
+                    size="small"
+                    className="flex-1"
+                    value={selectedFloorId}
+                    onChange={(v) => setSelectedFloorId(v)}
+                  >
+                    {floors.map(f => <Select.Option key={f.id} value={f.id}>{f.name}</Select.Option>)}
+                  </Select>
+                  <div className="flex space-x-2">
+                    <Button size="small" icon={<PlusOutlined />} onClick={() => {
+                      const newId = Date.now();
+                      setFloors(prev => [...prev, { id: newId, name: `New Floor`, type: 'FOUR_WHEEL', mapCols: 60, mapRows: 40 }]);
+                      setSelectedFloorId(newId);
+                    }}>More</Button>
+                    <Button size="small" type="primary" icon={<SaveOutlined />} onClick={handleSave}>
+                      Save Floor
+                    </Button>
+                  </div>
+                </div>
+                {floors.find(f => f.id === selectedFloorId) && (
+                  <div className="space-y-3">
+                    <div>
+                      <Text className="text-xs text-gray-500 block mb-1">Floor Name:</Text>
+                      <Input
+                        size="small"
+                        value={floors.find(f => f.id === selectedFloorId)?.name}
+                        onChange={(e) => setFloors(prev => prev.map(f => f.id === selectedFloorId ? { ...f, name: e.target.value } : f))}
+                      />
+                    </div>
+                    <div>
+                    <Text className="text-xs text-gray-500 block mb-1">Floor characteristics (Limited to vehicle type):</Text>
+                    <Select
+                      size="small"
+                      value={floors.find(f => f.id === selectedFloorId)?.type}
+                      className="w-full"
+                      onChange={(v) => {
+                         setFloors(prev => prev.map(f => f.id === selectedFloorId ? { ...f, type: v as 'FOUR_WHEEL' | 'TWO_WHEEL' } : f));
+                      }}
+                    >
+                      <Select.Option value="FOUR_WHEEL">Floor Car (4 wheels)</Select.Option>
+                      <Select.Option value="TWO_WHEEL">Floor Motorcycle (2 wheels)</Select.Option>
+                    </Select>
+                  </div>
+                  </div>
+                )}
+                <div>
+                  <Text className="text-xs text-gray-500 block mb-1">Matrix size (Cell):</Text>
+                  <div className="flex items-center space-x-2">
+                    <InputNumber size="small" value={mapCols} onChange={v => v && handleUpdateMapSize(v, mapRows)} className="w-20" />
+                    <Text type="secondary">x</Text>
+                    <InputNumber size="small" value={mapRows} onChange={v => v && handleUpdateMapSize(mapCols, v)} className="w-20" />
+                  </div>
+                </div>
+              </div>
+            </Panel>
+
+            <Panel
+              header={<div className="flex justify-between items-center w-full pr-4">
+                <Text strong>2. Parking Zone (Zone)</Text>
+                <Button type="primary" size="small" icon={<PlusOutlined />} onClick={(e) => { e.stopPropagation(); handleAddZone(); }} />
+              </div>}
+              key="2"
+              className="border-b border-gray-100"
+            >
+              {activeZone ? (
+                <div className="space-y-4">
+                  <div className="p-2 bg-blue-50 border border-blue-100 rounded flex justify-between items-center">
+                    <Text strong className="text-blue-700">
+                      <Input
+                        value={activeZone.name}
+                        size="small"
+                        variant="borderless"
+                        className="font-bold text-blue-700 p-0"
+                        onChange={(e) => setZones(prev => prev.map(z => z.id === activeZone.id ? {...z, name: e.target.value} : z))}
+                      />
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="text-xs text-gray-500 block mb-1">Zone function:</Text>
+                    <Select
+                      size="small" className="w-full" value={activeZone.functionType}
+                      onChange={v => setZones(prev => prev.map(z => z.id === activeZone.id ? {...z, functionType: v} : z))}
+                    >
+                      <Select.Option value="WALK_IN">Walk-in</Select.Option>
+                      <Select.Option value="MONTHLY">Monthly Pass (Monthly)</Select.Option>
+                      <Select.Option value="BACKUP">Backup</Select.Option>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Text className="text-xs text-gray-500 block mb-1">Vehicle Type:</Text>
+                    <Select
+                      size="small" className="w-full" value={activeZone.vehicleTypeId}
+                      onChange={v => setZones(prev => prev.map(z => z.id === activeZone.id ? {...z, vehicleTypeId: v} : z))}
+                    >
+                      {validVehicleTypes.map(vt => (
+                          <Select.Option key={vt.id} value={vt.id}>
+                            {vt.iconUrl ? <img src={getImageUrl(vt.iconUrl)} style={{width: 16, height: 16, marginRight: 8, objectFit: 'contain', display: 'inline-block'}} /> : null}
+                            {vt.typeName}
+                          </Select.Option>
+                      ))}
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Text className="text-xs text-gray-500 block mb-1">Parking Quantity (reduces to 0 to delete):</Text>
+                    <InputNumber
+                      size="small" min={0} max={100} value={activeZone.capacity} className="w-full"
+                      onChange={v => {
+                        if (v === 0) {
+                          Modal.confirm({
+                            title: 'Confirm delete Zone',
+                            content: 'are you sure you want to delete this Zone',
+                            okText: 'Delete',
+                            cancelText: 'Cancel',
+                            onOk: () => {
+                              setZones(prev => prev.filter(z => z.id !== activeZone.id));
+                              setSelectedEntity(null);
+                            }
+                          });
+                        } else if (v !== null && v !== undefined) {
+                          handleUpdateZoneCapacity(activeZone.id, v);
+                        }
+                      }}
+                    />
+                  </div>
+
+
+
+                  <Button block icon={<SyncOutlined />} onClick={() => handleRotateZone(activeZone.id)}>
+                    Xoay Zone 90°
+                  </Button>
+                </div>
+              ) : (
+                <div className="py-4 text-center text-gray-400 italic text-sm">
+
+                                                        Click on a Zone on the map to configure it
+                                                      </div>
+              )}
+            </Panel>
+
+            <Panel header={<Text strong>3. Single Slot (Slot)</Text>} key="3" className="border-b border-gray-100 bg-slate-50/50">
+              {activeSlot && activeZone ? (
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center p-2 bg-white border border-gray-200 rounded">
+                    <Text strong className="text-lg">{activeSlot.name}</Text>
+                    <Badge status={activeSlot.status === 'EMPTY' ? 'success' : (activeSlot.status === 'OCCUPIED' ? 'error' : 'default')} text={activeSlot.status} />
+                  </div>
+
+                  <div className="flex justify-between items-center mt-4">
+                    <Text>normal active:</Text>
+                    <Switch
+                      checked={activeSlot.status !== 'DISABLED'}
+                      onChange={(checked) => handleToggleSlotStatus(activeZone.id, activeSlot.id, checked ? 'EMPTY' : 'DISABLED')}
+                    />
+                  </div>
+                  <Text type="secondary" className="text-xs italic block mt-1">
+
+                                                          * Turn off the switch to switch to Maintenance mode. Maintenance is not possible if the vehicle is in use
+                                                        </Text>
+                </div>
+              ) : (
+                <div className="py-4 text-center text-gray-400 italic text-sm">
+
+                                                        Double click on a Slot to configure it separately
+                                                      </div>
+              )}
+            </Panel>
+
+            <Panel
+              header={<div className="flex justify-between items-center w-full pr-4">
+                <Text strong className={activeGate ? "text-amber-600" : ""}>4. Gate Information (Gate)</Text>
+                <Button type="primary" size="small" icon={<PlusOutlined />} onClick={(e) => { e.stopPropagation(); handleAddGate(); }} />
+              </div>}
+              key="4"
+            >
+              {activeGate ? (
+                <div className="space-y-4">
+                  <div className={`p-3 rounded border ${activeGate.status === 'OCCUPIED' ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+                    <div className="flex items-center mb-1">
+                      <GatewayOutlined className="mr-2 text-lg" />
+                      <Input
+                        value={activeGate.name}
+                        size="small"
+                        variant="borderless"
+                        className="font-bold p-0"
+                        onChange={(e) => setGates(prev => prev.map(g => g.id === activeGate.id ? {...g, name: e.target.value} : g))}
+                      />
+                    </div>
+                    <Text className="text-xs block mt-2 text-gray-500">
+
+                                                                * Gate function (Enter/Exit) and Vehicle Type will be chosen by the Staff when closing the shift at this gate
+                                                              </Text>
+                    <div className="mt-3">
+                      <Text className="text-xs block">Current status: <Text strong>{activeGate.status}</Text></Text>
+                      {activeGate.staffName && <Text className="text-xs block">Staff on duty: <Text strong>{activeGate.staffName}</Text></Text>}
+                    </div>
+                  </div>
+
+                  <Button
+                    danger
+                    block
+                    icon={<DeleteOutlined />}
+                    onClick={() => {
+                      Modal.confirm({
+                        title: 'Confirm Delete Gate',
+                        content: 'Are you sure you want to delete this Gate? This is a soft delete, old data will not be lost.',
+                        okText: 'Delete',
+                        cancelText: 'Cancel',
+                        onOk: () => {
+                          setGates(prev => prev.filter(g => g.id !== activeGate.id));
+                          setSelectedEntity(null);
+                        }
+                      });
+                    }}
+                  >
+                    Delete Gate (Soft Delete)
+                  </Button>
+                </div>
+              ) : (
+                <div className="py-4 text-center text-gray-400 italic text-sm">
+
+                                                        Click on the Gate icon on the map border to operate
+                                                      </div>
+              )}
+            </Panel>
+          </Collapse>
+        </div>
+
+        <div className="p-4 border-t border-gray-200 bg-white shrink-0 shadow-[0_-4px_15px_rgba(0,0,0,0.05)]">
+          <Button
+            type="primary"
+            size="large"
+            block
+            icon={<SaveOutlined />}
+            onClick={handleSave}
+            disabled={!isDirty}
+            className="bg-blue-600 hover:bg-blue-700 h-12 text-base font-medium shadow-md"
+          >
+
+                                  SAVE CONFIGURATION
+                                </Button>
+        </div>
+
+      </div>
+    </div>
+  );
+};
