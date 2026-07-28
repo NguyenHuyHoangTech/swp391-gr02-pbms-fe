@@ -1,20 +1,20 @@
 /**
  * @Author: Thái Tân Phú
- * @Date: 2026-07-11
- * @Description: Screen for customers to view and manage their active parking sessions, pre-bookings, and monthly passes. Includes 2FA lookup.
+ * @Date: 28/07/2026
+ * @Description: Quản lý đỗ xe của tôi (My Parking) - Nơi khách hàng theo dõi phiên đỗ xe hiện tại, quản lý vé đặt chỗ, vé tháng và lịch sử giao dịch. Các chức năng bao gồm: tìm kiếm phiên đỗ xe, hủy vé/hoàn tiền, gia hạn vé tháng và tra cứu lịch sử.
  * @Dependencies: 
- * - axiosClient (Local)
- * - FeeBreakdown (Local)
- * - react-query (External)
+ * - React, antd
+ * - axiosClient, react-query, dayjs
  */
 import React, { useState, useEffect } from 'react';
-import { Tabs, Card, Typography, List, Divider, Button, Tag, Spin, message, Input, Space, Popconfirm, Empty, Timeline, Drawer, Alert, Form, Select, Radio, Modal, QRCode } from 'antd';
+import { Tabs, Card, Typography, List, Divider, Button, Tag, Spin, message, Input, Space, Empty, Timeline, Drawer, Alert, Form, Select, Radio, Modal, QRCode } from 'antd';
 import { ClockCircleOutlined, CarOutlined, CreditCardOutlined, SearchOutlined, IdcardOutlined, CloseCircleOutlined, HistoryOutlined, CheckCircleOutlined, EditOutlined, WarningOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axiosClient from '../../core/api/axiosClient';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getImageUrl } from '../../core/utils/imageHelper';
+import { normalizePlateNumber } from '../../core/utils/licensePlateUtils';
 import { simulatedDayjs } from '../../core/utils/timeProvider';
 import { FeeBreakdown } from '../../components/FeeBreakdown';
 
@@ -29,6 +29,9 @@ interface Booking {
   reservationFee?: number;
   refundStatus?: string;
   refundAmount?: number;
+  refundRequestId?: number;
+  rejectReason?: string;
+  refundProofUrl?: string;
   vehicleTypeId?: number;
   rfid?: string;
 }
@@ -47,13 +50,13 @@ interface MonthlyPass {
 
 interface HistoryRecord {
   recordType: 'SESSION' | 'RESERVATION';
-  type: string; // display label
+  type: string; // Nhãn hiển thị trên giao diện
   plateNumber: string;
   fee: number;
   timeIn: string;
   timeOut: string;
   incidentDetails?: any[];
-  // Reservation-specific
+  // Các trường dữ liệu dành riêng cho vé Đặt chỗ (Reservation)
   status?: string;
   zoneName?: string;
   expectedEntryTime?: string;
@@ -62,29 +65,22 @@ interface HistoryRecord {
   refundAmount?: number;
   refundStatus?: string;
   forfeitedAmount?: number;
+  refundProofUrl?: string;
 }
 
 const { Title, Text } = Typography;
 
-/**
- * @Function: MyParkingScreen
- * @Description: Main component displaying customer's parking information across multiple tabs.
- * @Logic_Steps:
- * 1. Initialize state for active tabs, 2FA search inputs, and modal visibility.
- * 2. Fetch required data (bookings, passes, system config, history) using react-query.
- * 3. Handle timer updates for active parking sessions.
- * 4. Define handlers for searching, cancelling bookings, and renewing passes.
- * 5. Render appropriate UI components based on the active tab (Active/History/Monthly/Walk-in).
- *
- * @returns {JSX.Element} The rendered MyParkingScreen component
- */
 export const MyParkingScreen = () => {
   const queryClient = useQueryClient();
   const location = useLocation();
   const navigate = useNavigate();
   const [elapsedTime, setElapsedTime] = useState('');
 
-  // URL tab handling
+  // ==========================================
+  // [STATE]: XỬ LÝ ĐIỀU HƯỚNG TAB QUA URL
+  // - Bước 1: Parse tham số `?tab=` từ URL.
+  // - Bước 2: Dựa vào tham số để quyết định mở Tab nào (booking=2, monthly=3, history=4). Mặc định là 1 (Active Session).
+  // ==========================================
   const queryParams = new URLSearchParams(location.search);
   const tabParam = queryParams.get('tab');
   const [activeTab, setActiveTab] = useState(
@@ -93,31 +89,40 @@ export const MyParkingScreen = () => {
         tabParam === 'history' ? '4' : '1'
   );
 
-  const PACKAGES = [
-    { id: 1, name: '1 Month', discount: 0 },
-    { id: 3, name: '3 Months', discount: 0.05 },
-    { id: 6, name: '6 Months', discount: 0.10 },
-    { id: 12, name: '12 Months', discount: 0.15 },
+  const BASE_PACKAGES = [
+    { id: 1, name: '1 Month' },
+    { id: 3, name: '3 Months' },
+    { id: 6, name: '6 Months' },
+    { id: 12, name: '12 Months' },
   ];
+
   const GATEWAYS = [
     { id: 'PAYPAL', name: 'PayPal', icon: '/paypal_logo.webp' },
     { id: 'PAYOS', name: 'PayOS (VietQR)', icon: getImageUrl('/uploads/PayOS_Icon.webp') }
   ];
 
-  // Strict Walk-in 2FA Lookup
+  // ==========================================
+  // [STATE]: TÌM KIẾM BẢO MẬT 2 LỚP (WALK-IN)
+  // - Lưu trữ Biển số, thẻ RFID và Loại xe do người dùng nhập.
+  // ==========================================
   const [plateNumberInput, setPlateNumberInput] = useState('');
   const [rfidInput, setRfidInput] = useState('');
   const [vehicleTypeIdInput, setVehicleTypeIdInput] = useState<number | undefined>(undefined);
   const [hasSearched, setHasSearched] = useState(false);
   const [searchParams, setSearchParams] = useState({ plate: '', rfid: '', vehicleTypeId: undefined as number | undefined });
 
+  // ==========================================
+  // [DATA]: LẤY DANH SÁCH LOẠI PHƯƠNG TIỆN
+  // - Gọi API GET `/public/vehicle-types` lấy danh sách các loại xe hỗ trợ trong hệ thống.
+  // - Dùng để ánh xạ ID thành tên xe trên giao diện và Dropdown tìm kiếm.
+  // ==========================================
   const { data: vehicleTypes = [] } = useQuery({
     queryKey: ['system-vehicle-types'],
     queryFn: async () => {
       try {
         const res = await axiosClient.get('/public/vehicle-types');
         return res.data.data || [];
-      } catch (err) {
+      } catch {
         return [];
       }
     }
@@ -130,42 +135,61 @@ export const MyParkingScreen = () => {
   const [isHistoryDrawerVisible, setIsHistoryDrawerVisible] = useState(false);
   const [selectedHistoryPlate, setSelectedHistoryPlate] = useState('');
 
-  const { data: bookings = [], isLoading: isBookingsLoading } = useQuery<Booking[]>({
+  // ==========================================
+  // [DATA]: LẤY DANH SÁCH VÉ ĐẶT CHỖ (PRE-BOOKING)
+  // - Gọi API GET `/customer/reservations`.
+  // - Trả về mảng Booking chứa thông tin vị trí đỗ, thời gian đến và trạng thái thanh toán.
+  // ==========================================
+  const { data: bookings = [] } = useQuery<Booking[]>({
     queryKey: ['my-bookings'],
     queryFn: async () => {
       try {
         const res = await axiosClient.get('/customer/reservations');
         return res.data.data;
-      } catch (err) {
+      } catch {
         return [];
       }
     }
   });
 
-  const { data: monthlyPasses = [], isLoading: isPassesLoading } = useQuery<MonthlyPass[]>({
+  // ==========================================
+  // [DATA]: LẤY DANH SÁCH VÉ THÁNG (MONTHLY PASS)
+  // - Gọi API GET `/operation/monthly-tickets`.
+  // - Trả về mảng MonthlyPass bao gồm ngày hết hạn, biển số và trạng thái (còn hạn/đã hết hạn).
+  // ==========================================
+  const { data: monthlyPasses = [] } = useQuery<MonthlyPass[]>({
     queryKey: ['my-passes'],
     queryFn: async () => {
       try {
         const res = await axiosClient.get('/operation/monthly-tickets');
         return res.data.data;
-      } catch (err) {
+      } catch {
         return [];
       }
     }
   });
 
+  // ==========================================
+  // [DATA]: LẤY BẢNG GIÁ (PRICING POLICIES)
+  // - Gọi API GET `/public/pricing` để tính toán số tiền phạt, tiền gia hạn.
+  // ==========================================
   const { data: pricingPolicies = [] } = useQuery<any[]>({
     queryKey: ['pricing-policies'],
     queryFn: async () => {
       try {
         const res = await axiosClient.get('/public/pricing');
         return res.data.data;
-      } catch (err) {
+      } catch {
         return [];
       }
     }
   });
 
+  // ==========================================
+  // [DATA]: LẤY CẤU HÌNH HOÀN TIỀN (REFUND CONFIGS)
+  // - Bước 1: Fetch 3 key cấu hình (thời gian hủy sớm, tỉ lệ hủy sớm, tỉ lệ hủy muộn).
+  // - Bước 2: Dùng dữ liệu này để tính toán số tiền khách nhận lại khi hủy vé đặt chỗ.
+  // ==========================================
   const { data: configs = { earlyMins: 30, refundLate: 0.5, refundEarly: 1.0 } } = useQuery({
     queryKey: ['system_config_refunds'],
     queryFn: async () => {
@@ -173,7 +197,7 @@ export const MyParkingScreen = () => {
         try {
           const res = await axiosClient.get(`/public/config/${key}`);
           return res.data.data ? parseFloat(res.data.data) : fallback;
-        } catch (err) {
+        } catch {
           return fallback;
         }
       };
@@ -186,6 +210,29 @@ export const MyParkingScreen = () => {
     }
   });
 
+  // ==========================================
+  // [DATA]: LẤY CẤU HÌNH GIẢM GIÁ (DISCOUNT CONFIGS)
+  // - Gọi API GET `/operation/monthly-tickets/config-discounts` để lấy tỷ lệ giảm giá theo gói tháng.
+  // ==========================================
+  const { data: discountConfig = {} } = useQuery({
+    queryKey: ['config-discounts'],
+    queryFn: async () => {
+      const res = await axiosClient.get('/operation/monthly-tickets/config-discounts');
+      return res.data.data || {};
+    }
+  });
+
+  const PACKAGES = BASE_PACKAGES.map(p => ({
+    ...p,
+    discount: discountConfig[p.id.toString()] || 0
+  }));
+
+  // ==========================================
+  // [DATA]: LẤY LỊCH SỬ ĐỖ XE & ĐẶT CHỖ
+  // - Bước 1: Nhận Biển số (selectedHistoryPlate). Nếu trống, bỏ qua.
+  // - Bước 2: Gọi API GET `/operation/parking-sessions/history?plate={Biển số}`.
+  // - Bước 3: Map trạng thái từ API trả về thành nhãn hiển thị dễ hiểu (Tiếng Việt) trước khi lưu vào State.
+  // ==========================================
   const { data: historyRecords = [], isLoading: isHistoryLoading } = useQuery<HistoryRecord[]>({
     queryKey: ['my-history', selectedHistoryPlate],
     queryFn: async () => {
@@ -211,14 +258,16 @@ export const MyParkingScreen = () => {
               timeOut: '---',
               status: resStatus,
               zoneName: item.zoneName,
+              expectedEntryTime: item.expectedEntryTime,
               expectedDurationMinutes: item.expectedDurationMinutes,
               reservationFee: item.reservationFee || 0,
               refundAmount: item.refundAmount || 0,
               refundStatus: item.refundStatus,
               forfeitedAmount: item.forfeitedAmount || 0,
+              refundProofUrl: item.refundProofUrl,
             };
           }
-          // Normal parking session
+          // Map dữ liệu cho Phiên đỗ xe thông thường (Walk-in)
           return {
             recordType: 'SESSION' as const,
             type: 'Vào bãi',
@@ -229,14 +278,19 @@ export const MyParkingScreen = () => {
             incidentDetails: item.incidentDetails
           };
         });
-      } catch (err) {
+      } catch {
         return [];
       }
     },
     enabled: isHistoryDrawerVisible && !!selectedHistoryPlate
   });
 
-  // We only fetch active session if we have searched in the Walk-in tab
+  // ==========================================
+  // [DATA]: LẤY THÔNG TIN PHIÊN ĐỖ XE ĐANG HOẠT ĐỘNG (WALK-IN)
+  // - Mã giả: Gọi API kiểm tra xem xe có đang đỗ trong bãi hay không, dựa vào Biển số, thẻ RFID và loại xe.
+  // - Chỉ tự động gọi khi cờ `hasSearched` = true.
+  // ==========================================
+  // Lưu ý: Cờ enabled đảm bảo chỉ gọi API lấy phiên đỗ xe hiện tại KHI người dùng đã thực sự nhấn "Tìm kiếm" ở tab Walk-in.
   const { data: session, isLoading, isFetching } = useQuery({
     queryKey: ['my-active-session', searchParams.plate, searchParams.rfid, searchParams.vehicleTypeId],
     queryFn: async () => {
@@ -266,34 +320,20 @@ export const MyParkingScreen = () => {
     return () => clearInterval(timer);
   }, [session]);
 
-  /**
-   * @Function: handleSearchWalkIn
-   * @Description: Initiates a search for an active walk-in parking session using 2FA parameters.
-   * @Logic_Steps:
-   * 1. Update search parameters with current input values (plate, rfid, vehicleTypeId).
-   * 2. Set hasSearched flag to true to trigger the react-query fetching the session data.
-   *
-   * @returns {void}
-   */
+  // ==========================================
+  // [ACTION]: TÌM KIẾM PHIÊN ĐỖ XE HIỆN TẠI (WALK-IN)
+  // - Mã giả: Lưu lại biển số, thẻ RFID, loại xe do người dùng nhập vào state `searchParams`.
+  // - Cờ `hasSearched` bật lên sẽ kích hoạt `useQuery` (my-active-session) tự động gọi API tìm kiếm.
+  // ==========================================
   const handleSearchWalkIn = () => {
     setSearchParams({ plate: plateNumberInput, rfid: rfidInput, vehicleTypeId: vehicleTypeIdInput });
     setHasSearched(true);
   };
 
-  /**
-   * @Function: handleViewParkingStatus
-   * @Description: Pre-fills and executes the walk-in search form using data from an active reservation or pass.
-   * @Logic_Steps:
-   * 1. Set the active tab to Walk-in ('1').
-   * 2. Update the URL parameters to reflect the walk-in tab.
-   * 3. Set the input states (plate, rfid, vehicleTypeId) with the provided arguments.
-   * 4. Trigger the search by setting searchParams and hasSearched flag.
-   *
-   * @param {string} plate - License plate number
-   * @param {number} [vehicleTypeId] - Optional ID of the vehicle type
-   * @param {string} [rfid] - Optional RFID card code
-   * @returns {void}
-   */
+  // ==========================================
+  // [ACTION]: XEM TRẠNG THÁI TỪ TAB KHÁC CHUYỂN SANG
+  // - Mã giả: Chuyển sang Tab 1 (Walk-in), tự động điền biển số/thẻ RFID vào form và kích hoạt tìm kiếm ngay lập tức.
+  // ==========================================
   const handleViewParkingStatus = (plate: string, vehicleTypeId?: number, rfid?: string) => {
     setActiveTab('1');
     navigate(`/customer/my-parking?tab=walkin`, { replace: true });
@@ -307,6 +347,9 @@ export const MyParkingScreen = () => {
   const [selectedIncident, setSelectedIncident] = useState<any>(null);
   const [isIncidentModalVisible, setIsIncidentModalVisible] = useState(false);
 
+  // ==========================================
+  // [MUTATION]: API HỦY VÉ / NỘP LẠI THÔNG TIN HOÀN TIỀN
+  // ==========================================
   const cancelBookingMutation = useMutation({
     mutationFn: async ({ id, data }: { id: number | string; data: any }) => {
       await axiosClient.put(`/customer/reservations/${id}/cancel`, data);
@@ -322,51 +365,69 @@ export const MyParkingScreen = () => {
     }
   });
 
-  /**
-   * @Function: handleCancelBooking
-   * @Description: Submits a cancellation and refund request for a selected reservation.
-   * @Logic_Steps:
-   * 1. Check if a booking is selected (selectedBookingToCancel).
-   * 2. Call the cancelBookingMutation with the booking ID and bank details (bankName, accountNumber, accountName).
-   * 3. On success, the mutation will invalidate queries to refresh data and close the modal.
-   *
-   * @returns {void}
-   */
+  const resubmitRefundMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: number | string; data: any }) => {
+      await axiosClient.put(`/finance/refunds/${id}/resubmit`, data);
+    },
+    onSuccess: () => {
+      message.success('Refund resubmitted successfully.');
+      queryClient.invalidateQueries({ queryKey: ['my-bookings'] });
+      setCancelDrawerVisible(false);
+      setSelectedBookingToCancel(null);
+      setIsResubmitRefund(false);
+    },
+    onError: (error: any) => {
+      message.error(error?.response?.data?.message || 'Failed to resubmit refund.');
+    }
+  });
+
+  // ==========================================
+  // [ACTION]: XÁC NHẬN HỦY VÉ HOẶC GỬI LẠI YÊU CẦU HOÀN TIỀN
+  // - Bước 1: Kiểm tra cờ `isResubmitRefund` (Nộp lại).
+  // - Bước 2: Nếu đúng, gọi Mutation `resubmitRefundMutation` kèm ID của lệnh Hoàn tiền.
+  // - Bước 3: Nếu sai, gọi Mutation `cancelBookingMutation` kèm ID Vé đặt chỗ.
+  // - Bước 4: Cả 2 đều gửi kèm thông tin Ngân hàng (Tên NH, Số TK, Tên TK).
+  // ==========================================
   const handleCancelBooking = () => {
     if (selectedBookingToCancel) {
-      cancelBookingMutation.mutate({
-        id: selectedBookingToCancel.id,
-        data: {
-          bankName,
-          accountNumber,
-          accountName
-        }
-      });
+      if (isResubmitRefund) {
+        resubmitRefundMutation.mutate({
+          id: selectedBookingToCancel.refundRequestId || 0,
+          data: { bankName, accountNumber, accountName }
+        });
+      } else {
+        cancelBookingMutation.mutate({
+          id: selectedBookingToCancel.id,
+          data: { bankName, accountNumber, accountName }
+        });
+      }
     }
   };
 
-  /**
-   * @Function: calculateRefund
-   * @Description: Calculates the refundable amount and penalty for a reservation cancellation.
-   * @Logic_Steps:
-   * 1. Return 0 for all values if no booking is provided.
-   * 2. Calculate the difference in minutes between the expected entry time and current time.
-   * 3. IF (diffMins >= configs.earlyMins) -> refundPercent = configs.refundEarly.
-   * 4. ELSE IF (diffMins > 0) -> refundPercent = configs.refundLate.
-   * 5. ELSE -> refundPercent = 0.
-   * 6. Calculate refund amount based on the reservation fee and the determined percentage.
-   * 7. Calculate penalty as the remaining amount.
-   * 8. Return the calculated values.
-   *
-   * @param {Booking | null} booking - The reservation booking object
-   * @returns {Object} { amount, refund, penalty, percent }
-   */
+  // ==========================================
+  // [LOGIC]: TÍNH TOÁN SỐ TIỀN HOÀN LẠI VÀ TIỀN PHẠT KHI HỦY VÉ
+  // - Bước 1: Kiểm tra `isResubmitRefund`. Nếu đúng, trả về thẳng số tiền backend đã tính.
+  // - Bước 2: Nếu hủy vé mới, tính khoảng cách (phút) giữa hiện tại và giờ dự kiến (diffMins).
+  // - Bước 3: Dựa trên `configs` (cấu hình), nếu hủy sớm (diff >= earlyMins) -> hoàn refundEarly.
+  // - Bước 4: Nếu hủy muộn (0 < diff < earlyMins) -> hoàn refundLate. 
+  // - Bước 5: Trả về Object gồm số tiền, tiền phạt, phần trăm.
+  // ==========================================
   const calculateRefund = (booking: Booking | null) => {
     if (!booking) return { refund: 0, penalty: 0, amount: 0, percent: 0 };
+    
+    const amount = booking.reservationFee || 50000;
+
+    if (isResubmitRefund) {
+      const refund = booking.refundAmount || 0;
+      const penalty = amount - refund;
+      const percent = amount > 0 ? Math.round((refund / amount) * 100) : 0;
+      return { amount, refund, penalty, percent };
+    }
+
     const now = simulatedDayjs();
     const arrTime = simulatedDayjs(booking.expectedEntryTime);
     const diffMins = arrTime.diff(now, 'minute');
-    let refundPercent = 0;
+    let refundPercent;
 
     if (diffMins >= configs.earlyMins) {
       refundPercent = configs.refundEarly;
@@ -376,7 +437,6 @@ export const MyParkingScreen = () => {
       refundPercent = 0;
     }
 
-    const amount = booking.reservationFee || 50000;
     const refund = amount * refundPercent;
     const penalty = amount - refund;
 
@@ -384,12 +444,16 @@ export const MyParkingScreen = () => {
   };
 
   const [cancelDrawerVisible, setCancelDrawerVisible] = useState(false);
+  const [isResubmitRefund, setIsResubmitRefund] = useState(false);
   const [selectedBookingToCancel, setSelectedBookingToCancel] = useState<Booking | null>(null);
   const [bankName, setBankName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
   const [accountName, setAccountName] = useState('');
 
-  // Renew Pass States
+  // ==========================================
+  // [STATE]: QUẢN LÝ GIA HẠN VÉ THÁNG (RENEWAL)
+  // - Lưu trữ các modal, thời gian đếm ngược, cổng thanh toán và trạng thái thanh toán.
+  // ==========================================
   const [renewDrawerVisible, setRenewDrawerVisible] = useState(false);
   const [selectedPassToRenew, setSelectedPassToRenew] = useState<MonthlyPass | null>(null);
   const [renewDuration, setRenewDuration] = useState(1);
@@ -398,12 +462,18 @@ export const MyParkingScreen = () => {
   const [isRenewQRModalVisible, setIsRenewQRModalVisible] = useState(false);
   const [renewCountdown, setRenewCountdown] = useState(60);
   const [isRenewSuccess, setIsRenewSuccess] = useState(false);
+  const [isRenewVerifying, setIsRenewVerifying] = useState(false);
+  const [verifyCooldown, setVerifyCooldown] = useState(0);
   const [renewPaymentUrl, setRenewPaymentUrl] = useState('');
   const [renewPaymentQrCode, setRenewPaymentQrCode] = useState('');
   const [renewPaymentToken, setRenewPaymentToken] = useState('');
 
 
 
+  // ==========================================
+  // [API]: TẠO LINK THANH TOÁN GIA HẠN VÉ THÁNG
+  // - Mã giả: Gọi API /finance/payments/initialize để lấy URL cổng thanh toán và QR code.
+  // ==========================================
   const generateRenewLinkMutation = useMutation({
     mutationFn: async (totalFee: number) => {
       const res = await axiosClient.post('/finance/payments/initialize', {
@@ -429,24 +499,13 @@ export const MyParkingScreen = () => {
         setRenewPaymentToken(data.data.paymentUrl.split('/').pop() || '');
       }
     },
-    onError: () => {
-      message.error('Error creating renewal payment link.');
+    onError: (err: any) => {
+      const errorMsg = err.response?.data?.message || 'Error creating renewal payment link.';
+      message.error(errorMsg);
       setIsRenewQRModalVisible(false);
     }
   });
 
-  /**
-   * @Function: handleOpenRenew
-   * @Description: Opens the monthly pass renewal drawer with initial values.
-   * @Logic_Steps:
-   * 1. Set the selected pass to renew.
-   * 2. Reset the renewal duration to 1 month.
-   * 3. Reset the payment gateway to PAYPAL.
-   * 4. Display the renewal drawer.
-   *
-   * @param {MonthlyPass} pass - The monthly pass to renew
-   * @returns {void}
-   */
   const handleOpenRenew = (pass: MonthlyPass) => {
     setSelectedPassToRenew(pass);
     setRenewDuration(1);
@@ -454,17 +513,10 @@ export const MyParkingScreen = () => {
     setRenewDrawerVisible(true);
   };
 
-  /**
-   * @Function: handleConfirmRenew
-   * @Description: Initiates the payment process for renewing a monthly pass.
-   * @Logic_Steps:
-   * 1. Open the QR payment modal and reset countdown timer and success flags.
-   * 2. Call generateRenewLinkMutation to obtain the payment URL from the backend.
-   * 3. The mutation's onSuccess will start a polling process (useEffect) to check payment status.
-   *
-   * @param {number} totalFee - The total calculated fee for renewal
-   * @returns {void}
-   */
+  // ==========================================
+  // [ACTION]: XÁC NHẬN GIA HẠN VÀ MỞ MODAL THANH TOÁN
+  // - Mã giả: Đặt lại bộ đếm 60s, mở Modal mã QR và gọi API tạo link thanh toán.
+  // ==========================================
   const handleConfirmRenew = (totalFee: number) => {
     setIsRenewQRModalVisible(true);
     setIsRenewSuccess(false);
@@ -476,44 +528,125 @@ export const MyParkingScreen = () => {
 
   useEffect(() => {
     let timer: any;
+    if (verifyCooldown > 0) {
+      timer = setTimeout(() => setVerifyCooldown(c => c - 1), 1000);
+    }
+    return () => clearTimeout(timer);
+  }, [verifyCooldown]);
+
+  // ==========================================
+  // [ACTION]: XÁC MINH THANH TOÁN THỦ CÔNG (DỰ PHÒNG WEBSOCKET BỊ LỖI)
+  // - Mã giả: 
+  //   1. Gọi API /capture đến cổng thanh toán hỏi xem đã chuyển tiền chưa.
+  //   2. Nếu trả về COMPLETED -> Gọi API /execute-action để ép Backend cộng hạn vé.
+  //   3. Báo thành công và đóng Modal.
+  // ==========================================
+  const handleManualVerifyRenew = () => {
+    if (!renewPaymentToken || verifyCooldown > 0) return;
+    setIsRenewVerifying(true);
+    const captureUrl = renewGateway === 'PAYOS' ? '/finance/payments/payos/capture' : '/finance/payments/paypal/capture';
+    
+    axiosClient.post(captureUrl, { token: renewPaymentToken })
+      .then(res => {
+        if (res.data?.data?.status === 'COMPLETED') {
+          axiosClient.post('/finance/payments/execute-action', { token: renewPaymentToken })
+            .then(() => {
+              setIsRenewSuccess(true);
+              message.success('Monthly pass renewed successfully!');
+              queryClient.invalidateQueries({ queryKey: ['my-passes'] });
+              setTimeout(() => {
+                setIsRenewQRModalVisible(false);
+                setRenewDrawerVisible(false);
+              }, 2000);
+            })
+            .catch(err => {
+              message.error(err.response?.data?.message || 'System Error: Payment refunded.');
+              setIsRenewSuccess(true); // Stop polling
+              setIsRenewQRModalVisible(false);
+              setRenewDrawerVisible(false);
+            });
+        } else {
+           message.warning('Payment not yet completed on the gateway.');
+        }
+      })
+      .catch(err => {
+         if (err.response?.status === 400) {
+           message.warning('Payment not yet received. Please try again later.');
+         } else {
+           message.error('System is busy or unable to verify.');
+         }
+      })
+      .finally(() => {
+         setIsRenewVerifying(false);
+         setVerifyCooldown(10);
+      });
+  };
+
+  // ==========================================
+  // [EFFECT]: BỘ ĐẾM NGƯỢC 60 GIÂY CHO QR THANH TOÁN
+  // - Mỗi giây trừ 1. Hết 60s sẽ hiện nút "Xác minh thủ công".
+  // ==========================================
+  useEffect(() => {
+    let timer: any;
     if (isRenewQRModalVisible && !isRenewSuccess && renewPaymentToken) {
       if (renewCountdown > 0) {
         timer = setTimeout(() => {
           setRenewCountdown(c => c - 1);
-          if (renewCountdown % 3 === 0) {
-            const captureUrl = renewGateway === 'PAYOS' ? '/finance/payments/payos/capture' : '/finance/payments/paypal/capture';
-            axiosClient.post(captureUrl, { token: renewPaymentToken })
-              .then(res => {
-                if (res.data?.data?.status === 'COMPLETED') {
-                  axiosClient.post('/finance/payments/execute-action', { token: renewPaymentToken })
-                    .then(execRes => {
-                      setIsRenewSuccess(true);
-                      message.success('Monthly pass renewed successfully!');
-                      queryClient.invalidateQueries({ queryKey: ['my-passes'] });
-                      setTimeout(() => {
-                        setIsRenewQRModalVisible(false);
-                        setRenewDrawerVisible(false);
-                      }, 2000);
-                    })
-                    .catch(err => {
-                      message.error(err.response?.data?.message || 'System Error: Payment refunded.');
-                      setIsRenewSuccess(true); // Stop polling
-                      setIsRenewQRModalVisible(false);
-                      setRenewDrawerVisible(false);
-                    });
-                }
-              })
-              .catch(() => { });
-          }
         }, 1000);
-      } else {
-        setIsRenewQRModalVisible(false);
-        message.warning('Payment timeout.');
       }
     }
     return () => clearTimeout(timer);
-  }, [isRenewQRModalVisible, isRenewSuccess, renewPaymentToken, renewCountdown]);
+  }, [renewCountdown, isRenewQRModalVisible, isRenewSuccess, renewPaymentToken]);
 
+  // ==========================================
+  // [EFFECT]: WEBSOCKET LẮNG NGHE KẾT QUẢ THANH TOÁN (GIA HẠN VÉ THÁNG)
+  // - Mã giả: Lắng nghe kênh /topic/payments/{token}. Khi Backend báo SUCCESS -> Đóng modal và báo thành công.
+  // ==========================================
+  useEffect(() => {
+    let client: any = null;
+    let subscription: any = null;
+
+    if (isRenewQRModalVisible && !isRenewSuccess && renewPaymentToken) {
+      import('@stomp/stompjs').then(({ Client }) => {
+        client = new Client({
+          brokerURL: window.location.protocol === 'https:' ? `wss://${window.location.host}/ws-pbms` : `ws://${window.location.host}/ws-pbms`,
+          reconnectDelay: 5000,
+        });
+
+        client.onConnect = () => {
+          subscription = client.subscribe(`/topic/payments/${renewPaymentToken}`, (msg: any) => {
+            const payload = JSON.parse(msg.body);
+            if (payload.status === 'SUCCESS') {
+              setIsRenewSuccess(true);
+              message.success('Monthly pass renewed successfully!');
+              queryClient.invalidateQueries({ queryKey: ['my-passes'] });
+              setTimeout(() => {
+                setIsRenewQRModalVisible(false);
+                setRenewDrawerVisible(false);
+              }, 2000);
+            } else if (payload.status === 'FAILED') {
+              message.error(payload.message || 'System Error: Payment refunded.');
+              setIsRenewSuccess(true);
+              setIsRenewQRModalVisible(false);
+              setRenewDrawerVisible(false);
+            }
+          });
+        };
+
+        client.activate();
+      });
+    }
+
+    return () => {
+      if (subscription) subscription.unsubscribe();
+      if (client) client.deactivate();
+    };
+  }, [isRenewQRModalVisible, isRenewSuccess, renewPaymentToken, queryClient]);
+
+  // ==========================================
+  // [RENDER]: GIAO DIỆN PHIÊN ĐỖ XE HIỆN TẠI (ĐANG TRONG BÃI)
+  // - Hiển thị: Thông tin xe, thời gian đã đỗ, bảng giá dự kiến, lỗi vi phạm (nếu có).
+  // ==========================================
   const renderActiveSession = () => {
     if (isLoading || isFetching) return <div className="p-12 text-center"><Spin size="large" /></div>;
 
@@ -638,6 +771,9 @@ export const MyParkingScreen = () => {
     );
   };
 
+  // ==========================================
+  // [RENDER]: TAB 1 - TRA CỨU XE KHÁCH VÃNG LAI (WALK-IN)
+  // ==========================================
   const renderWalkInTab = () => (
     <div className="animate-fade-in">
       <Card className="bg-blue-50/50 border-blue-100 mb-6 shadow-sm">
@@ -648,7 +784,7 @@ export const MyParkingScreen = () => {
             placeholder="Enter License Plate"
             prefix={<CarOutlined className="text-gray-400" />}
             value={plateNumberInput}
-            onChange={(e) => setPlateNumberInput(e.target.value)}
+            onChange={(e) => setPlateNumberInput(normalizePlateNumber(e.target.value))}
           />
           <Select
             size="large"
@@ -684,6 +820,10 @@ export const MyParkingScreen = () => {
     </div>
   );
 
+  // ==========================================
+  // [RENDER]: TAB 2 - QUẢN LÝ VÉ ĐẶT CHỖ (PRE-BOOKING)
+  // - Tách thành 2 danh sách: Đang hoạt động (PENDING/ACTIVE) và Lịch sử (COMPLETED/CANCELLED).
+  // ==========================================
   const renderBookingsTab = () => {
     const activeBookings = bookings.filter(b => b.status === 'PENDING' || b.status === 'ACTIVE');
     const historyBookings = bookings.filter(b => b.status !== 'PENDING' && b.status !== 'ACTIVE');
@@ -700,6 +840,7 @@ export const MyParkingScreen = () => {
             if (item.status === 'CANCELLED') {
               if (item.refundStatus === 'PENDING') displayStatus = 'PENDING_REFUND';
               else if (item.refundStatus === 'REFUNDED') displayStatus = 'CANCELLED_REFUNDED';
+              else if (item.refundStatus === 'REJECTED') displayStatus = 'REJECTED_REFUND';
               else if (item.refundAmount === 0 || !item.refundAmount) displayStatus = 'CANCELLED_NO_REFUND';
             }
 
@@ -723,7 +864,8 @@ export const MyParkingScreen = () => {
                                 displayStatus === 'COMPLETED_UNUSED' ? 'NO SHOW' :
                                   displayStatus === 'PENDING_REFUND' ? 'PENDING REFUND' :
                                     displayStatus === 'CANCELLED_REFUNDED' ? 'CANCELLED & REFUNDED' :
-                                      displayStatus === 'CANCELLED_NO_REFUND' ? 'CANCELLED (NO REFUND)' : 'CANCELLED'}
+                                      displayStatus === 'REJECTED_REFUND' ? 'REFUND REJECTED' :
+                                        displayStatus === 'CANCELLED_NO_REFUND' ? 'CANCELLED (NO REFUND)' : 'CANCELLED'}
                         </Tag>
                         <Text type="secondary" className="text-[10px] md:text-xs">ID: {item.id}</Text>
                       </div>
@@ -732,6 +874,7 @@ export const MyParkingScreen = () => {
                       </Title>
                       <div className="mt-4 space-y-1">
                         <Text className={`block ${displayStatus !== 'PENDING' && displayStatus !== 'ACTIVE' ? 'text-gray-400' : 'text-gray-500'}`}>Expected arrival: <Text strong className={displayStatus !== 'PENDING' && displayStatus !== 'ACTIVE' ? 'text-gray-400' : 'text-gray-800'}>{dayjs(item.expectedEntryTime).format('HH:mm DD/MM/YYYY')}</Text></Text>
+                        <Text className={`block ${displayStatus !== 'PENDING' && displayStatus !== 'ACTIVE' ? 'text-gray-400' : 'text-gray-500'}`}>Expected exit: <Text strong className={displayStatus !== 'PENDING' && displayStatus !== 'ACTIVE' ? 'text-gray-400' : 'text-gray-800'}>{dayjs(item.expectedEntryTime).add(item.expectedDurationMinutes || 0, 'minute').format('HH:mm DD/MM/YYYY')}</Text></Text>
                         <Text className={`block ${displayStatus !== 'PENDING' && displayStatus !== 'ACTIVE' ? 'text-gray-400' : 'text-gray-500'}`}>Reserved location: <Text strong className={displayStatus !== 'PENDING' && displayStatus !== 'ACTIVE' ? 'text-gray-400' : 'text-gray-800'}>{item.zoneName || item.slotName}</Text></Text>
                       </div>
                     </div>
@@ -791,6 +934,29 @@ export const MyParkingScreen = () => {
                       {displayStatus === 'PENDING_REFUND' && (
                         <Text type="secondary" className="text-sm italic mt-2">Expected processing: 1-2 days</Text>
                       )}
+                      {displayStatus === 'REJECTED_REFUND' && (
+                        <div className="mt-2 text-right">
+                          <Text type="danger" className="text-xs block mb-1 font-semibold">Reason: {item.rejectReason || 'Invalid bank info'}</Text>
+                          <Button 
+                            danger 
+                            size="small" 
+                            onClick={() => {
+                              setSelectedBookingToCancel(item);
+                              setIsResubmitRefund(true);
+                              setCancelDrawerVisible(true);
+                            }}
+                          >
+                            Resubmit Refund Request
+                          </Button>
+                        </div>
+                      )}
+                      {displayStatus === 'CANCELLED_REFUNDED' && item.refundProofUrl && (
+                        <div className="mt-2 text-right">
+                          <a href={getImageUrl(item.refundProofUrl)} target="_blank" rel="noreferrer" className="text-blue-600 underline text-sm font-semibold flex items-center justify-end">
+                             <CheckCircleOutlined className="mr-1" /> Xem ảnh hoàn tiền
+                          </a>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </Card>
@@ -830,8 +996,18 @@ export const MyParkingScreen = () => {
   };
 
   const renderMonthlyPassTab = () => {
-    const activePasses = monthlyPasses.filter(p => !p.status.includes('EXPIRED') || p.inParkingLot);
-    const inactivePasses = monthlyPasses.filter(p => p.status === 'EXPIRED' && !p.inParkingLot);
+    const activePasses = monthlyPasses.filter(p => !p.status.includes('EXPIRED') || p.inParkingLot)
+      .sort((a, b) => {
+        const idA = parseInt(String(a.id).replace('MP-', ''), 10) || 0;
+        const idB = parseInt(String(b.id).replace('MP-', ''), 10) || 0;
+        return idB - idA;
+      });
+    const inactivePasses = monthlyPasses.filter(p => p.status === 'EXPIRED' && !p.inParkingLot)
+      .sort((a, b) => {
+        const idA = parseInt(String(a.id).replace('MP-', ''), 10) || 0;
+        const idB = parseInt(String(b.id).replace('MP-', ''), 10) || 0;
+        return idB - idA;
+      });
 
     const renderList = (passes: MonthlyPass[]) => (
       passes.length > 0 ? (
@@ -1041,20 +1217,20 @@ export const MyParkingScreen = () => {
         </div>
 
         <Drawer
-          title={<span className="text-red-600 font-bold">CANCEL RESERVATION & REFUND</span>}
+          title={<span className="text-red-600 font-bold">{isResubmitRefund ? 'RESUBMIT REFUND REQUEST' : 'CANCEL RESERVATION & REFUND'}</span>}
           width={450}
-          onClose={() => setCancelDrawerVisible(false)}
+          onClose={() => { setCancelDrawerVisible(false); setIsResubmitRefund(false); }}
           open={cancelDrawerVisible}
           extra={
             <Space>
-              <Button onClick={() => setCancelDrawerVisible(false)}>Keep</Button>
+              <Button onClick={() => { setCancelDrawerVisible(false); setIsResubmitRefund(false); }}>Keep</Button>
               <Button
                 type="primary"
                 danger
                 onClick={handleCancelBooking}
                 disabled={Boolean(selectedBookingToCancel && calculateRefund(selectedBookingToCancel).refund > 0 && (!bankName || !accountNumber || !accountName))}
               >
-                Confirm Cancel
+                {isResubmitRefund ? 'Submit Refund Info' : 'Confirm Cancel'}
               </Button>
             </Space>
           }
@@ -1313,10 +1489,31 @@ export const MyParkingScreen = () => {
                   )}
                 </Text>
 
-                <div className="flex items-center justify-center space-x-2 text-slate-600">
-                  <Spin size="small" />
-                  <Text>Waiting for payment ({renewCountdown}s)...</Text>
-                </div>
+                {renewCountdown > 0 ? (
+                  <div className="flex items-center justify-center space-x-2 text-slate-600 mb-2">
+                    <Spin size="small" />
+                    <Text>Waiting for payment ({renewCountdown}s)...</Text>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center space-x-2 text-orange-600 mb-2 bg-orange-50 p-2 rounded-lg border border-orange-200">
+                    <WarningOutlined />
+                    <Text className="text-orange-600 font-semibold text-center">Auto-verification timeout. Please confirm manually if you have paid.</Text>
+                  </div>
+                )}
+
+                {renewPaymentUrl && renewPaymentToken && (
+                    <div className="mb-4 text-center">
+                      <Button 
+                        type="link" 
+                        onClick={handleManualVerifyRenew} 
+                        loading={isRenewVerifying}
+                        disabled={verifyCooldown > 0}
+                        className={`font-semibold ${verifyCooldown > 0 ? 'text-slate-400' : 'text-orange-600'}`}
+                      >
+                        {verifyCooldown > 0 ? `Please wait ${verifyCooldown}s to verify again` : 'I have paid but the screen hasn\'t updated. Verify now!'}
+                      </Button>
+                    </div>
+                )}
               </>
             ) : (
               <div className="animate-fade-in py-8">
@@ -1438,6 +1635,10 @@ export const MyParkingScreen = () => {
                           <Text strong className="text-slate-700">{record.timeIn}</Text>
                         </div>
                         <div>
+                          <Text type="secondary" className="block mb-1">📅 Giờ dự kiến ra:</Text>
+                          <Text strong className="text-slate-700">{record.expectedEntryTime && record.expectedDurationMinutes ? dayjs(record.expectedEntryTime).add(record.expectedDurationMinutes, 'minute').format('HH:mm DD/MM/YYYY') : '---'}</Text>
+                        </div>
+                        <div>
                           <Text type="secondary" className="block mb-1">🅿️ Khu vực:</Text>
                           <Text strong className="text-slate-700">{record.zoneName || 'N/A'}</Text>
                         </div>
@@ -1450,6 +1651,13 @@ export const MyParkingScreen = () => {
                           <Text strong className={(record.refundAmount || 0) > 0 ? 'text-green-600' : 'text-slate-400'}>
                             {(record.refundAmount || 0) > 0 ? `+${(record.refundAmount || 0).toLocaleString()} VND` : 'Không có'}
                           </Text>
+                          {record.refundProofUrl && (
+                            <div className="mt-1">
+                              <a href={getImageUrl(record.refundProofUrl)} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs font-semibold">
+                                Xem ảnh hoàn tiền
+                              </a>
+                            </div>
+                          )}
                         </div>
                       </div>
                       {(record.forfeitedAmount || 0) > 0 && (
