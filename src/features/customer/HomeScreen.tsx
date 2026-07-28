@@ -1,34 +1,24 @@
 /**
  * @Author: Thái Tân Phú
- * @Date: 2026-07-10
- * @Description: Landing page for customers displaying real-time parking status, pre-booking form, and pricing details.
- * @Dependencies:
- * - axiosClient (Local API caller)
- * - @tanstack/react-query (State & Data Fetching)
- * - antd (UI Library)
+ * @Date: 28/07/2026
+ * @Description: Màn hình Trang chủ (Home Screen) - Hiển thị giao diện tổng quan, form đặt chỗ nhanh, tình trạng bãi đỗ xe theo thời gian thực và bảng giá.
+ * @Dependencies: 
+ * - React, antd
+ * - axiosClient, react-query, dayjs
  */
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import axiosClient from '../../core/api/axiosClient';
-import { getImageUrl } from '../../core/utils/imageHelper';
 import { useNavigate } from 'react-router-dom';
 import { DatePicker } from 'antd';
 import { simulatedDayjs } from '../../core/utils/timeProvider';
 import dayjs from 'dayjs';
 import { 
   CarOutlined, 
-  ClockCircleOutlined,
-  BookOutlined
+  ClockCircleOutlined
 } from '@ant-design/icons';
 
-/**
- * Allowed vehicle types in the system.
- */
-type VehicleType = 'CAR' | 'MOTORBIKE' | 'EBIKE';
-
-/**
- * Structure representing the availability status of a specific parking slot/zone type.
- */
+// Cấu trúc dữ liệu
 interface SlotData {
   type: string;
   label: string;
@@ -36,52 +26,63 @@ interface SlotData {
   icon: React.ReactNode;
 }
 
-/**
- * @Function: HomeScreen
- * @Description: Main customer landing screen component.
- * @Logic_Steps:
- * 1. Fetch real-time parking status every 5 seconds.
- * 2. Fetch active vehicle types and pricing policies.
- * 3. Process fetched data into SlotData objects.
- * 4. Render Hero Section (Pre-booking), Status Section, and Pricing Section.
- * 
- * @returns {JSX.Element} The rendered home screen
- */
 export const HomeScreen = () => {
   const navigate = useNavigate();
-  // 1. REAL-TIME STATE
+  // ==========================================
+  // [STATE]: TRẠNG THÁI REAL-TIME HIỂN THỊ CHỖ TRỐNG
+  // ==========================================
   const [slots, setSlots] = useState<SlotData[]>([]);
   const [selectedVehicleTypeId, setSelectedVehicleTypeId] = useState<string | null>(null);
   
-  // 2. HERO FORM STATE
+  // ==========================================
+  // [STATE]: FORM ĐẶT CHỖ NHANH (HERO SECTION)
+  // ==========================================
   const [formVehicle, setFormVehicle] = useState<string>('');
   const [formArrivalTime, setFormArrivalTime] = useState<dayjs.Dayjs | null>(() => simulatedDayjs().add(30, 'minute'));
 
+  // ==========================================
+  // [DATA]: LẤY TÌNH TRẠNG CHỖ TRỐNG THEO THỜI GIAN THỰC
+  // - Bước 1: Gọi API GET `/public/parking-status` để lấy danh sách slot trống theo loại xe.
+  // - Bước 2: Dữ liệu này được tự động gọi lại mỗi 5 giây (Polling) qua thuộc tính `refetchInterval`.
+  // - Bước 3: Cache dữ liệu trong React Query dưới dạng mảng.
+  // ==========================================
   const { data: parkingStatusData } = useQuery({
     queryKey: ['public-parking-status'],
     queryFn: async () => {
       try {
         const res = await axiosClient.get('/public/parking-status');
         return res.data.data;
-      } catch (err) {
+      } catch {
         return [];
       }
     },
-    refetchInterval: 5000 // Real-time polling
+    refetchInterval: 5000 // Tự động gọi lại API mỗi 5 giây (Polling)
   });
 
+  // ==========================================
+  // [DATA]: LẤY DANH SÁCH LOẠI PHƯƠNG TIỆN
+  // - Gọi API GET `/public/vehicle-types` để lấy dữ liệu các loại xe (ô tô, xe máy, xe điện...).
+  // - Dữ liệu dùng để lọc tình trạng đỗ xe và hiển thị Dropdown đặt chỗ.
+  // ==========================================
   const { data: vehicleTypes } = useQuery({
     queryKey: ['public-vehicle-types'],
     queryFn: async () => {
       try {
         const res = await axiosClient.get('/public/vehicle-types');
         return res.data.data;
-      } catch (err) {
+      } catch {
         return [];
       }
     }
   });
 
+  // ==========================================
+  // [EFFECT]: LỌC VÀ ĐỒNG BỘ DỮ LIỆU CHỖ TRỐNG
+  // - Bước 1: Lấy các loại xe đang `ACTIVE` từ `vehicleTypes`.
+  // - Bước 2: Lọc mảng `parkingStatusData` sao cho chỉ chứa các loại xe `ACTIVE` đó.
+  // - Bước 3: Tự động gán lựa chọn loại xe mặc định (nếu chưa chọn) vào form đặt chỗ.
+  // - Bước 4: Chuyển đổi dữ liệu và gán icon tương ứng (Ô tô, Xe máy, Xe điện) rồi lưu vào State `slots`.
+  // ==========================================
   useEffect(() => {
     if (parkingStatusData && parkingStatusData.length > 0) {
       let filteredData = parkingStatusData;
@@ -111,42 +112,46 @@ export const HomeScreen = () => {
     }
   }, [parkingStatusData, vehicleTypes]);
 
+  // ==========================================
+  // [DATA]: LẤY BẢNG GIÁ DỊCH VỤ
+  // - Gọi API GET `/public/pricing` để lấy danh sách bảng giá (khách vãng lai, vé tháng...).
+  // ==========================================
   const { data: pricingPolicies } = useQuery({
     queryKey: ['public-pricing'],
     queryFn: async () => {
       try {
         const res = await axiosClient.get('/public/pricing');
         return res.data.data;
-      } catch (err) {
+      } catch {
         return [];
       }
     }
   });
 
+  // ==========================================
+  // [DATA]: LẤY THÔNG TIN CẤU HÌNH TÒA NHÀ
+  // - Gọi API GET `/public/building-profile` lấy tên và cấu hình bãi đỗ xe để hiển thị ở Hero Section.
+  // ==========================================
   const { data: buildingProfile } = useQuery({
     queryKey: ['public-building-profile'],
     queryFn: async () => {
       try {
         const res = await axiosClient.get('/public/building-profile');
         return res.data.data;
-      } catch (err) {
+      } catch {
         return null;
       }
     }
   });
 
-  // Helpers for Slot rendering (New UI)
-  /**
-   * @Function: renderSlotCard
-   * @Description: Renders an individual slot availability card based on its capacity.
-   * @Logic_Steps:
-   * 1. Check if the slot is full (0 available) or in warning state (<= 5 available).
-   * 2. Determine CSS classes (colors, animations, icons) based on capacity and vehicle type.
-   * 3. Return a styled card component displaying the capacity information.
-   * 
-   * @param {SlotData} slot - The slot data to render
-   * @returns {JSX.Element} Card element
-   */
+  // ==========================================
+  // [RENDER]: GIAO DIỆN HIỂN THỊ THẺ CHỖ TRỐNG THEO LOẠI XE
+  // - Nhận tham số là một `SlotData` (loại xe, chỗ trống).
+  // - Xử lý logic màu sắc, viền, icon dựa theo trạng thái:
+  //   + Hết chỗ (available = 0): Màu đỏ, hiệu ứng nhấp nháy chữ SOLD OUT.
+  //   + Sắp hết chỗ (available <= 5): Màu cam báo hiệu Almost Full.
+  //   + Còn trống nhiều: Màu xanh lá cây.
+  // ==========================================
   const renderSlotCard = (slot: SlotData) => {
     const isFull = slot.available === 0;
     const isWarning = slot.available > 0 && slot.available <= 5;
@@ -194,19 +199,13 @@ export const HomeScreen = () => {
     );
   };
 
-  // Pricing rendering
-  /**
-   * @Function: renderPricingCards
-   * @Description: Renders the pricing information section for Guest and Monthly Passes.
-   * @Logic_Steps:
-   * 1. Validate if pricing policies and active vehicle types exist.
-   * 2. Find the selected vehicle type's pricing policy.
-   * 3. Render toggle buttons for active vehicle types.
-   * 4. Render Guest Walk-in pricing card based on policy blocks/shifts.
-   * 5. Render Monthly Pass pricing card if a monthly rate exists.
-   * 
-   * @returns {JSX.Element | null} The pricing section or null
-   */
+  // ==========================================
+  // [RENDER]: GIAO DIỆN BẢNG GIÁ THEO LOẠI XE
+  // - Bước 1: Render các nút chọn loại xe (Tab bar).
+  // - Bước 2: Tìm policy (bảng giá) dựa trên loại xe đang được chọn (`selectedVehicleTypeId`).
+  // - Bước 3: Render thẻ bảng giá "Khách vãng lai" (gồm giá cơ sở và chi tiết từng ca).
+  // - Bước 4: Render thẻ bảng giá "Vé tháng" (nếu có `monthlyRate > 0`).
+  // ==========================================
   const renderPricingCards = () => {
     if (!pricingPolicies || pricingPolicies.length === 0) return <p className="text-slate-500 italic text-center">Hệ thống đang cập nhật bảng giá...</p>;
     
@@ -264,9 +263,7 @@ export const HomeScreen = () => {
                     <ul className="space-y-4 text-sm text-slate-600 font-medium mt-4">
                         <li className="flex items-center gap-3"><svg className="w-5 h-5 text-cyan-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg> Thanh toán linh hoạt tại cổng ra</li>
                         <li className="flex items-center gap-3"><svg className="w-5 h-5 text-cyan-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg> Nhận diện biển số LPR chính xác 99%</li>
-                        {policy.maxParkingCap > 0 && (
-                          <li className="flex items-center gap-3"><svg className="w-5 h-5 text-cyan-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg> Giá trần tối đa: <strong className="text-slate-800">{policy.maxParkingCap.toLocaleString()}đ/lượt</strong></li>
-                        )}
+
                         
                         {/* Chi tiết ca đỗ */}
                         {policy.shifts && policy.shifts.length > 0 && (
@@ -342,7 +339,9 @@ export const HomeScreen = () => {
     <div className="min-h-screen bg-[#F8FAFC] pb-12 font-sans selection:bg-cyan-200">
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-20">
         
-        {/* HERO SECTION */}
+        {/* ========================================== */}
+        {/* [RENDER]: HERO SECTION (BỘ TÌM KIẾM & ĐẶT CHỖ NHANH) */}
+        {/* ========================================== */}
         <section className="relative rounded-[2rem] md:rounded-[2.5rem] bg-white overflow-hidden shadow-sm border border-slate-100 min-h-[auto] md:min-h-[75vh] flex flex-col justify-center pt-8 pb-8 px-4 md:px-8 lg:px-12 mt-4 md:mt-8">
             <div className="absolute inset-0 bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20"></div>
             <div className="absolute top-0 right-0 w-[300px] md:w-[600px] h-[300px] md:h-[600px] bg-cyan-400/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3"></div>
@@ -363,7 +362,9 @@ export const HomeScreen = () => {
                     </p>
                 </div>
 
-                {/* Booking Card */}
+                {/* ========================================== */}
+                {/* [RENDER]: THẺ ĐẶT CHỖ */}
+                {/* ========================================== */}
                 <div className="w-full lg:max-w-md">
                     <div className="bg-white/80 backdrop-blur-2xl rounded-3xl p-6 md:p-8 border border-white shadow-[0_8px_30px_rgb(0,0,0,0.04)] relative">
                         <div className="absolute -inset-0.5 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-[1.6rem] blur opacity-20"></div>
@@ -426,7 +427,9 @@ export const HomeScreen = () => {
             </div>
         </section>
 
-        {/* STATUS SECTION */}
+        {/* ========================================== */}
+        {/* [RENDER]: TRẠNG THÁI LƯU BÃI (REAL-TIME STATUS) */}
+        {/* ========================================== */}
         <section className="relative">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-8 md:mb-10 pb-6 border-b border-slate-200 gap-4">
                 <div>
@@ -450,11 +453,13 @@ export const HomeScreen = () => {
             </div>
         </section>
 
-        {/* PRICING SECTION */}
+        {/* ========================================== */}
+        {/* [RENDER]: BẢNG GIÁ DỊCH VỤ */}
+        {/* ========================================== */}
         <section className="relative">
             <div className="text-center mb-8 md:mb-16 max-w-3xl mx-auto">
                 <h2 className="text-2xl md:text-3xl font-black text-slate-800 tracking-tight mb-4">Gói dịch vụ linh hoạt</h2>
-                <p className="text-slate-500 font-medium text-sm md:text-base">Thanh toán tự động không tiền mặt qua cổng điện tử hoặc ví VNPay. Bảng giá minh bạch, không phụ phí ẩn, tích hợp nhận diện biển số.</p>
+                <p className="text-slate-500 font-medium text-sm md:text-base">Thanh toán tự động không tiền mặt qua cổng điện tử. Bảng giá minh bạch, không phụ phí ẩn, tích hợp nhận diện biển số.</p>
             </div>
 
             {renderPricingCards()}
