@@ -6,6 +6,31 @@
  * =========================================================================================
  * CHI TIẾT VÒNG ĐỜI VÀ KIẾN TRÚC XỬ LÝ CỦA ExceptionDeskScreen.tsx (KÈM MINH CHỨNG CODE)
  * (Trình bày chi tiết luồng hoạt động ánh xạ trực tiếp vào các dòng code trong file này)
+
+// =========================================================================
+// PHẦN 1: CÁC THƯ VIỆN UI VÀ TIỆN ÍCH REACT
+// =========================================================================
+import { useState, useMemo, useEffect } from 'react'; // Quản lý vòng đời và State của Component
+import { Typography, Button, Badge, List, Tag, Modal, InputNumber, Card, Select, FloatButton } from 'antd'; // Các UI Element cơ bản của Ant Design
+import { WarningOutlined, PlusOutlined, CreditCardOutlined, ArrowLeftOutlined } from '@ant-design/icons'; // Bộ icon hiển thị
+import { useNavigate } from 'react-router-dom'; // Hook để điều hướng chuyển trang (Chuyển sang màn hình Giao Ca)
+
+// =========================================================================
+// PHẦN 2: CÁC THƯ VIỆN QUẢN LÝ TRẠNG THÁI VÀ KẾT NỐI API
+// =========================================================================
+import { useAuthStore } from '../../core/store/useAuthStore'; // Lấy thông tin user và role đang đăng nhập từ Zustand Store
+import { useQuery, useMutation, useQueryClient, useIsFetching } from '@tanstack/react-query'; // Hook hỗ trợ gọi API tự động (polling) và quản lý Cache
+import axiosClient from '../../core/api/axiosClient'; // Cấu hình Axios gọi API tới Backend có đính kèm Token JWT
+
+// =========================================================================
+// PHẦN 3: CÁC COMPONENT CON (UI MODULES)
+// =========================================================================
+import { IncidentSubmitForm } from '../incident/components/IncidentSubmitForm'; // Form tạo sự cố mới
+import { IncidentDetailPanel } from '../incident/components/IncidentDetailPanel'; // Bảng chi tiết trạng thái xử lý sự cố
+
+/**
+ * =========================================================================================
+
  * =========================================================================================
  * 
  * BƯỚC 1: KHỞI TẠO COMPONENT LỚN (SCREEN INITIALIZATION)
@@ -29,29 +54,6 @@
  *   2 bộ UI cho Mobile (dạng vuốt) và Desktop (dạng 3 cột) nhưng xài chung 1 nguồn Logic.
  * =========================================================================================
  */
-
-// =========================================================================
-// PHẦN 1: CÁC THƯ VIỆN UI VÀ TIỆN ÍCH REACT
-// =========================================================================
-import { useState, useMemo, useEffect } from 'react'; // Quản lý vòng đời và State của Component
-import { Typography, Button, Badge, List, Tag, Modal, InputNumber, Card, Select, FloatButton } from 'antd'; // Các UI Element cơ bản của Ant Design
-import { WarningOutlined, PlusOutlined, CreditCardOutlined, ArrowLeftOutlined } from '@ant-design/icons'; // Bộ icon hiển thị
-import { useNavigate } from 'react-router-dom'; // Hook để điều hướng chuyển trang (Chuyển sang màn hình Giao Ca)
-
-// =========================================================================
-// PHẦN 2: CÁC THƯ VIỆN QUẢN LÝ TRẠNG THÁI VÀ KẾT NỐI API
-// =========================================================================
-import { useAuthStore } from '../../core/store/useAuthStore'; // Lấy thông tin user và role đang đăng nhập từ Zustand Store
-import { useQuery, useMutation, useQueryClient, useIsFetching } from '@tanstack/react-query'; // Hook hỗ trợ gọi API tự động (polling) và quản lý Cache
-import axiosClient from '../../core/api/axiosClient'; // Cấu hình Axios gọi API tới Backend có đính kèm Token JWT
-
-// =========================================================================
-// PHẦN 3: CÁC COMPONENT CON (UI MODULES)
-// =========================================================================
-import { IncidentSubmitForm } from '../incident/components/IncidentSubmitForm'; // Form tạo sự cố mới
-import { IncidentDetailPanel } from '../incident/components/IncidentDetailPanel'; // Bảng chi tiết trạng thái xử lý sự cố
-
-
 const { Title, Text } = Typography;
 
 export const ExceptionDeskScreen = () => {

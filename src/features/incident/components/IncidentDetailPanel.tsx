@@ -51,9 +51,8 @@
 // PHẦN 1: CÁC THƯ VIỆN UI VÀ TIỆN ÍCH REACT
 // =========================================================================
 import React, { useState, useEffect } from 'react';
-import { Card, Typography, Steps, Button, Tag, Input, Upload, message, InputNumber, Modal, Select, Form, Radio, Table, QRCode } from 'antd';
-import {
-  CheckCircleOutlined, CloseCircleOutlined, UploadOutlined, QrcodeOutlined
+import { Card, Typography, Steps, Button, Tag, Input, Upload, message, InputNumber, Modal, Select, Divider, Form, Radio, Table, QRCode } from 'antd';
+import { CameraOutlined, CheckCircleOutlined, CloseCircleOutlined, UploadOutlined, LockOutlined, WarningOutlined, QrcodeOutlined } from '@ant-design/icons';
 } from '@ant-design/icons';
 
 // =========================================================================
@@ -258,7 +257,6 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
         setDamageCausePhase1(ticket.fineAmount > 0 ? 'USER' : 'NATURAL');
       }
     }
-
     if (ticket && ticket.phase === 1) {
       if (ticket.type === 'LOST_CARD') {
         setP1FineAmount(ticket.fineAmount > 0 ? ticket.fineAmount : getLostCardPenalty());
@@ -379,11 +377,10 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
         paymentMethod: paymentMethod,
         checkoutToken: ticket.checkoutToken
       };
-
       if (ticket.type === 'FEE_DISPUTE' && feeDiscount > 0) {
         payload.discountAmount = feeDiscount;
       }
-
+      
       await axiosClient.put(`/incident/incidents/${ticket.id}/resolve`, payload);
     },
     onSuccess: () => {
@@ -528,7 +525,6 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
     if (!paymentOrderId || verifyCooldown > 0) return;
     setIsVerifying(true);
     const captureUrl = paymentMethod === 'PAYOS' ? '/finance/payments/payos/capture' : '/finance/payments/paypal/capture';
-
     axiosClient.post(captureUrl, { token: paymentOrderId })
       .then(res => {
         if (res.data?.data?.status === 'COMPLETED') {
@@ -628,8 +624,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
     );
   };
 
-  const currentStep = ticket.status === 'CANCELLED' || ticket.status === 'REJECTED'
-    ? 2
+  const currentStep = ticket.status === 'CANCELLED' || ticket.status === 'REJECTED' ? 2 : (ticket.phase === 1 ? 0 : ticket.phase === 2 ? 1 : 2);
     : (ticket.phase === 1 ? 0 : ticket.phase === 2 ? 1 : 2);
 
   return (
@@ -753,7 +748,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                                 </div>
                               ) : (
                                 <div className="bg-slate-50 p-4 rounded-lg mb-4 border border-slate-200">
-                                  <FeeBreakdown
+<FeeBreakdown
                                     durationMinutes={ticket.durationMinutes || 0}
                                     customerType={ticket.customerType || 'GUEST'}
                                     expectedFee={ticket.expectedFee || ticket.sessionParkingFee || 0}
@@ -765,13 +760,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                                     isLightMode={true}
                                   />
                                   <Form.Item label="Số tiền giảm (VND) - Sẽ trừ vào Tổng phí đỗ xe" className="mt-4 mb-0 font-medium">
-                                    <InputNumber
-                                      className="w-full"
-                                      size="large"
-                                      min={0}
-                                      max={calculatedParkingFee}
-                                      value={p1DiscountAmount}
-                                      onChange={v => setP1DiscountAmount(v || 0)}
+<InputNumber className="w-full" size="large" min={0} max={calculatedParkingFee} value={p1DiscountAmount} onChange={v => setP1DiscountAmount(v || 0)} 
                                     />
                                     {p1DiscountAmount > calculatedParkingFee && (
                                       <div className="text-red-500 text-sm mt-1">Số tiền giảm không được lớn hơn tổng phí hiện tại.</div>
@@ -783,17 +772,11 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                           )}
                           {ticket.type === 'OTHER' && (
                             <Form.Item label="Số tiền phạt (VND) - Bắt buộc nhập" required className="mt-4 font-medium">
-                              <InputNumber
-                                className="w-full"
-                                size="large"
-                                min={0}
-                                value={p1FineAmount}
-                                onChange={v => setP1FineAmount(v || 0)}
+<InputNumber className="w-full" size="large" min={0} value={p1FineAmount} onChange={v => setP1FineAmount(v || 0)} 
                                 placeholder="Nhập số tiền phạt (VND)"
                               />
                             </Form.Item>
                           )}
-
                           {ticket.type === 'LOST_CARD' && (
                             <Form.Item label="Số tiền phạt (VND)" className="mt-4 font-medium">
                               <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center">
@@ -805,8 +788,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
 
                           {ticket.type === 'DAMAGED_CARD' && (
                             <Form.Item label="Xác nhận nguyên nhân hỏng thẻ (Cập nhật phí phạt)" className="mt-4 font-medium">
-                              <Radio.Group
-                                value={damageCausePhase1}
+<Radio.Group value={damageCausePhase1}
                                 onChange={(e) => {
                                   setDamageCausePhase1(e.target.value);
                                   setP1FineAmount(e.target.value === 'USER' ? getDamagedCardPenalty() : 0);
@@ -826,10 +808,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                               <Button icon={<UploadOutlined />}>Chọn ảnh</Button>
                             </Upload>
                           </Form.Item>
-                          <Button
-                            type="primary"
-                            onClick={() => processPhase1Mutation.mutate()}
-                            loading={processPhase1Mutation.isPending}
+<Button type="primary" onClick={() => processPhase1Mutation.mutate()} loading={processPhase1Mutation.isPending} 
                             disabled={ticket.type === 'FEE_DISPUTE' && p1DiscountAmount > calculatedParkingFee}
                             className="w-full"
                           >
@@ -842,7 +821,6 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                 </Card>
               )
             },
-
             // BƯỚC 2: XỬ LÝ & THU TIỀN
             {
               title: <span className="font-bold text-lg">Giai đoạn 2: Xử lý và Chờ ra bãi</span>,
@@ -852,10 +830,8 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                     const notes = ticket.resolutionNotes || '';
                     const p1Match = notes.match(/\[Phase 1\]([\s\S]*?)(?=\[Phase 2\]|\[CANCELLED\]|$)/);
                     const p2Match = notes.match(/\[Phase 2\]([\s\S]*?)(?=\[CANCELLED\]|$)/);
-
                     const p1Note = p1Match ? p1Match[1].trim() : '';
                     const p2Note = p2Match ? p2Match[1].trim() : '';
-
                     if (p1Note || p2Note) {
                       return (
                         <>
@@ -873,7 +849,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                               {renderImages(ticket.resolutionImageUrl, ['P2'])}
                               {ticket.status === 'RESOLVED' && (
                                 <div className="mt-3 pt-3 border-t border-slate-200">
-                                  <FeeBreakdown
+<FeeBreakdown
                                     durationMinutes={ticket.durationMinutes || 0}
                                     customerType={ticket.customerType || 'GUEST'}
                                     expectedFee={ticket.expectedFee || ticket.sessionParkingFee || 0}
@@ -891,7 +867,6 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                         </>
                       );
                     }
-
                     // Fallback for older data format
                     return (
                       <>
@@ -912,17 +887,17 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                         )}
                         {ticket.status === 'RESOLVED' && (
                           <div className="mt-3 pt-3 border-t border-slate-200">
-                            <FeeBreakdown
-                              durationMinutes={ticket.durationMinutes || 0}
-                              customerType={ticket.customerType || 'GUEST'}
-                              expectedFee={ticket.expectedFee || ticket.sessionParkingFee || 0}
-                              overtimeMinutes={ticket.overtimeMinutes || 0}
-                              overtimeFee={ticket.overtimeFee || 0}
-                              penaltyFee={totalPenalty}
-                              discountFee={ticket.discountFee || 0}
-                              totalFee={(ticket.sessionParkingFee || 0) + totalPenalty - (ticket.discountFee || 0)}
-                              isLightMode={true}
-                            />
+<FeeBreakdown
+  durationMinutes={ticket.durationMinutes || 0}
+  customerType={ticket.customerType || 'GUEST'}
+  expectedFee={ticket.expectedFee || ticket.sessionParkingFee || 0}
+  overtimeMinutes={ticket.overtimeMinutes || 0}
+  overtimeFee={ticket.overtimeFee || 0}
+  penaltyFee={totalPenalty}
+  discountFee={ticket.discountFee || 0}
+  totalFee={(ticket.sessionParkingFee || 0) + totalPenalty - (ticket.discountFee || 0)}
+  isLightMode={true}
+/>
                           </div>
                         )}
                       </>
@@ -933,16 +908,14 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                       <Title level={5} className="text-slate-700">Tra cứu danh sách vé tháng</Title>
                       <Text type="secondary" className="block mb-2 text-sm">Tra cứu danh sách vé tháng để dễ dàng liên hệ với chủ xe đỗ sai vị trí.</Text>
                       <div className="flex gap-4 mb-4">
-                        <Select
-                          placeholder="Chọn tầng"
+<Select placeholder="Chọn tầng" 
                           className="w-48"
                           value={selectedFloor}
                           onChange={setSelectedFloor}
                           options={floors.map((f: any) => ({ label: f.name, value: f.id }))}
                           allowClear
                         />
-                        <Select
-                          placeholder="Chọn loại xe"
+<Select placeholder="Chọn loại xe" 
                           className="w-48"
                           value={selectedVType}
                           onChange={setSelectedVType}
@@ -950,10 +923,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                           allowClear
                         />
                       </div>
-                      <Table
-                        dataSource={filteredMonthlyTickets}
-                        columns={monthlyTicketColumns}
-                        rowKey="id"
+<Table dataSource={filteredMonthlyTickets} columns={monthlyTicketColumns} rowKey="id" 
                         size="small"
                         pagination={{ pageSize: 5 }}
                         bordered
@@ -988,25 +958,24 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                           ) : (
                             <>
                               <div className="bg-slate-50 p-4 rounded-lg mb-4 border border-slate-200">
-                                <FeeBreakdown
-                                  durationMinutes={ticket.durationMinutes || 0}
-                                  customerType={ticket.customerType || 'GUEST'}
-                                  expectedFee={ticket.expectedFee || ticket.sessionParkingFee || 0}
-                                  overtimeMinutes={ticket.overtimeMinutes || 0}
-                                  overtimeFee={ticket.overtimeFee || 0}
-                                  penaltyFee={totalPenalty}
-                                  discountFee={feeDiscount || ticket.discountFee || 0}
-                                  totalFee={calculatedParkingFee + totalPenalty - (feeDiscount || ticket.discountFee || 0)}
-                                  isLightMode={true}
-                                />
+<FeeBreakdown 
+  durationMinutes={ticket.durationMinutes || 0}
+  customerType={ticket.customerType || 'GUEST'}
+  expectedFee={ticket.expectedFee || ticket.sessionParkingFee || 0}
+  overtimeMinutes={ticket.overtimeMinutes || 0}
+  overtimeFee={ticket.overtimeFee || 0}
+  penaltyFee={totalPenalty}
+  discountFee={feeDiscount || ticket.discountFee || 0}
+  totalFee={calculatedParkingFee + totalPenalty - (feeDiscount || ticket.discountFee || 0)}
+  isLightMode={true}
+/>
 
                               </div>
 
                               <Form layout="vertical">
                                 {ticket.type === 'DAMAGED_CARD' && (
                                   <Form.Item label="Xác nhận nguyên nhân hỏng thẻ (Cập nhật phí phạt)">
-                                    <Radio.Group
-                                      value={damageCausePhase2}
+<Radio.Group value={damageCausePhase2} 
                                       onChange={(e) => setDamageCausePhase2(e.target.value)}
                                       className="flex flex-col gap-2"
                                     >
@@ -1017,12 +986,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                                 )}
                                 {ticket.type === 'FEE_DISPUTE' && (
                                   <Form.Item label="Số tiền giảm (VND) - Trừ thẳng vào Tổng thanh toán">
-                                    <InputNumber
-                                      className="w-full"
-                                      size="large"
-                                      min={0}
-                                      value={feeDiscount}
-                                      onChange={v => setFeeDiscount(v || 0)}
+<InputNumber className="w-full" size="large" min={0} value={feeDiscount} onChange={v => setFeeDiscount(v || 0)} 
                                     />
                                   </Form.Item>
                                 )}
@@ -1034,10 +998,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                                     <Button icon={<UploadOutlined />}>Chọn ảnh</Button>
                                   </Upload>
                                 </Form.Item>
-
-                                <div className="mt-4 mb-4">
-                                  <Radio.Group
-                                    value={paymentMethod}
+<Radio.Group value={paymentMethod} 
                                     onChange={(e) => setPaymentMethod(e.target.value)}
                                     buttonStyle="solid"
                                     className="flex w-full bg-slate-100 rounded-lg p-1 border border-slate-200"
@@ -1047,7 +1008,6 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                                     <Radio.Button value="PAYOS" className="flex-1 text-center font-bold">PayOS QR</Radio.Button>
                                   </Radio.Group>
                                 </div>
-
                                 {(paymentMethod === 'PAYPAL' || paymentMethod === 'PAYOS') && (
                                   <div className="flex flex-col items-center justify-center p-4 bg-white rounded border-2 border-dashed border-blue-400 mb-4">
                                     {!paymentConfirmed ? (
@@ -1062,14 +1022,13 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                                               )
                                             ) : (
                                               <QRCode value={paymentUrl} size={160} />
+                                            )
                                             )}
                                             <div className="mt-2 text-center text-sm font-semibold text-slate-600">
                                               Yêu cầu khách quét QR để thanh toán. Cửa sổ sẽ tự đóng khi thanh toán thành công.
                                             </div>
                                             {paymentUrl && (
-                                              <Button
-                                                type="primary"
-                                                className="mt-2 bg-blue-600 hover:bg-blue-500 text-white font-bold w-full max-w-[200px]"
+<Button type="primary" className="mt-2 bg-blue-600 hover:bg-blue-500 text-white font-bold w-full max-w-[200px]" 
                                                 onClick={() => window.open(paymentUrl, '_blank')}
                                               >
                                                 Mở Link Thanh Toán
@@ -1094,11 +1053,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                                   </div>
                                 )}
 
-                                <Button
-                                  type="primary"
-                                  className="bg-green-600"
-                                  onClick={() => resolvePhase2Mutation.mutate()}
-                                  loading={resolvePhase2Mutation.isPending || isLoadingPayment}
+<Button type="primary" className="bg-green-600" onClick={() => resolvePhase2Mutation.mutate()} loading={resolvePhase2Mutation.isPending || isLoadingPayment} 
                                   disabled={(paymentMethod !== 'CASH' && !paymentConfirmed) || (calculatedParkingFee + totalPenalty - (feeDiscount || ticket.discountFee || 0)) <= 0}
                                   block
                                 >
@@ -1152,8 +1107,7 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
                   <div className="mb-2 whitespace-pre-wrap">
                     <Text type="secondary">Ghi chú hủy / xử lý:</Text>
                     <div className="font-medium text-red-700 break-all">{
-                      ticket.resolutionNotes?.includes('[CANCELLED]')
-                        ? ticket.resolutionNotes.substring(ticket.resolutionNotes.indexOf('[CANCELLED]'))
+                      ticket.resolutionNotes?.includes('[CANCELLED]') ? ticket.resolutionNotes.substring(ticket.resolutionNotes.indexOf('[CANCELLED]')) : (ticket.resolutionNotes || 'Không có ghi chú thêm')
                         : (ticket.resolutionNotes || 'Không có ghi chú thêm')
                     }</div>
                   </div>
@@ -1208,9 +1162,9 @@ export const IncidentDetailPanel: React.FC<IncidentDetailPanelProps> = ({ ticket
               <Select.Option value="OTHER">Lý do khác</Select.Option>
             </Select>
           </Form.Item>
-          <Form.Item label="Lý do chi tiết" required>
-            <TextArea rows={3} style={{ wordBreak: 'break-all' }} value={cancelReason} onChange={e => setCancelReason(e.target.value)} placeholder="Mô tả rõ tại sao lại hủy/từ chối" />
-          </Form.Item>
+<Form.Item label="Lý do chi tiết" required>
+  <TextArea rows={3} style={{ wordBreak: 'break-all' }} value={cancelReason} onChange={e => setCancelReason(e.target.value)} placeholder="Mô tả rõ tại sao lại hủy/từ chối" />
+</Form.Item>
           {userRole === 'STAFF' && (
             <Form.Item label="Ảnh minh chứng (nếu có)">
               <Upload beforeUpload={f => { setCancelFile(f); return false; }} maxCount={1} listType="picture" accept="image/*" capture="environment">
