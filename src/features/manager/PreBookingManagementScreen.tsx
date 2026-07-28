@@ -1,27 +1,22 @@
 /**
  * @Author: Thái Tân Phú
- * @Date: 2026-07-17
- * @Description: Màn hình quản lý đặt chỗ trước (Pre-booking Management) dành cho Manager.
- * Xử lý luồng dữ liệu (Data flow) từ Frontend xuống Backend thông qua React Query.
- * Bao gồm các tính năng: Bảng danh sách, Lọc 2 tầng (Ngày/Từ khóa -> Trạng thái),
- * Popup cấu hình hệ thống (Update configs).
+ * @Date: 28/07/2026
+ * @Description: Màn hình Quản lý Đặt chỗ (PreBooking Management) dành cho Quản lý. Giúp theo dõi lượng xe dự kiến vào bãi, cấu hình thời gian và tỷ lệ hoàn tiền.
  * @Dependencies: 
- * - axiosClient: Call API
- * - API: GET /system/configs (Lấy cấu hình hệ thống)
- * - API: POST/PUT /system/configs (Lưu cấu hình hệ thống - SystemConfigController)
- * - API: GET /customer/reservations (Lấy danh sách đặt chỗ - ReservationController -> ReservationDTO)
+ * - React, antd
+ * - axiosClient, react-query, dayjs
  */
 import { simulatedDayjs } from '../../core/utils/timeProvider';
 import dayjs from 'dayjs';
 import React, { useState } from 'react';
 import {
   Card, Typography, Table, Tag, Button, Input, DatePicker, Select,
-  Row, Col, Statistic, Drawer, Timeline, Divider, InputNumber, message, Space, Modal, Form, Switch, TimePicker
+  Row, Col, Statistic, Drawer, Timeline, Divider, InputNumber, message, Modal, Form
 } from 'antd';
 import {
   ScheduleOutlined, SearchOutlined, CheckCircleOutlined,
   CloseCircleOutlined, ClockCircleOutlined, SettingOutlined,
-  RightCircleOutlined, FilterOutlined, BugOutlined
+  RightCircleOutlined, BugOutlined
 } from '@ant-design/icons';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -30,10 +25,6 @@ import { ReservationTimersDebug } from '../debug/ReservationTimersDebug';
 
 const { Title, Text } = Typography;
 
-// KHAI BÁO KIỂU DỮ LIỆU (INTERFACE)
-// Đây là "bản thiết kế" cho 1 dòng dữ liệu (1 đơn hàng đặt chỗ) lấy từ Backend lên.
-// Giúp TypeScript hiểu được trong 1 đối tượng PreBooking sẽ có những trường (field) gì.
-// Pseudo-code: Định nghĩa Khuôn mẫu -> Khi nhận JSON từ API, FE sẽ biết id là chuỗi, fee là số...
 interface PreBooking {
   id: string;
   plateNumber: string;
@@ -52,30 +43,26 @@ interface PreBooking {
 }
 
 export const PreBookingManagementScreen = () => {
-  // CÁC BIẾN TRẠNG THÁI (STATE) ĐỂ ĐIỀU KHIỂN GIAO DIỆN
-  // selectedRecord: Lưu trữ thông tin của 1 dòng vé khi người dùng bấm nút "Details"
   const [selectedRecord, setSelectedRecord] = useState<PreBooking | null>(null);
-  // isDrawerOpen: Bật/tắt cái bảng trượt từ bên phải ra (Drawer)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  // isSettingsModalOpen: Bật/tắt popup Cấu hình
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [debugReservationId, setDebugReservationId] = useState<number | null>(null);
 
-  // CÁC BIẾN TRẠNG THÁI CHO BỘ LỌC TÌM KIẾM
-  // filterDateRange: Khoảng thời gian (Từ ngày - Đến ngày), mặc định là 7 ngày gần nhất
   const [filterDateRange, setFilterDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null]>([
     simulatedDayjs().subtract(7, 'day'),
     simulatedDayjs()
   ]);
-  // filterStatus: Trạng thái muốn lọc (Tất cả, Đang chờ, Đã xong...)
   const [filterStatus, setFilterStatus] = useState('ALL');
-  // searchKeyword: Từ khóa người dùng gõ vào thanh tìm kiếm
   const [searchKeyword, setSearchKeyword] = useState('');
 
-  // form: Quản lý dữ liệu khi nhập vào popup Cấu hình
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
 
+  // ==========================================
+  // [DATA]: LẤY CẤU HÌNH HỆ THỐNG
+  // - Bước 1: Gọi API GET `/system/configs` để lấy tất cả cấu hình.
+  // - Bước 2: Dùng cấu hình này để thiết lập số phút cảnh báo sớm, tỷ lệ hoàn tiền khi khách hủy vé.
+  // ==========================================
   const { data: configs } = useQuery({
     queryKey: ['system-configs'],
     queryFn: async () => {
@@ -96,45 +83,45 @@ export const PreBookingManagementScreen = () => {
     setIsSettingsModalOpen(true);
   };
 
-  // HÀM LƯU CẤU HÌNH XUỐNG BACKEND (MUTATION)
-  // Khi form cấu hình ấn Lưu, các giá trị (values) dạng JSON sẽ truyền vào đây.
+  // ==========================================
+  // [API]: CẬP NHẬT CẤU HÌNH HỆ THỐNG
+  // - Lặp qua 4 key cấu hình (RESERVATION_EARLY_MINS, RESERVATION_REFUND_LATE_PERCENT, RESERVATION_REFUND_EARLY_PERCENT, RESERVATION_DEFAULT_DURATION_MINS).
+  // - Kiểm tra xem key đã tồn tại chưa:
+  //   + Nếu tồn tại và giá trị bị thay đổi: Gọi API PUT (Cập nhật).
+  //   + Nếu chưa tồn tại: Gọi API POST (Tạo mới).
+  // - Sau khi chạy xong, gọi `invalidateQueries` để cập nhật giao diện.
+  // ==========================================
   const updateConfigsMutation = useMutation({
     mutationFn: async (values: any) => {
-      // Hàm con: Kiểm tra xem cấu hình (key) này ĐÃ CÓ trên Backend chưa
       const saveOrUpdate = async (key: string, val: string, desc: string) => {
         const obj = configs?.find((c: any) => c.configKey === key);
         if (obj) {
-          // Nếu ĐÃ CÓ và bị thay đổi giá trị -> Bắn API PUT (Update) kèm ID
           if (obj.configValue !== val) {
             await axiosClient.put(`/system/configs/${obj.id}`, { ...obj, configValue: val });
           }
         } else {
-          // Nếu CHƯA CÓ -> Bắn API POST (Create)
-          // Data JSON gửi xuống Controller: { "configKey": "...", "configValue": "..." }
           await axiosClient.post(`/system/configs`, { configKey: key, configValue: val, description: desc });
         }
       };
 
-      // Xử lý lưu từng ô input trên form
       await saveOrUpdate('RESERVATION_EARLY_MINS', values.earlyMins.toString(), 'Minutes before reservation time');
       await saveOrUpdate('RESERVATION_REFUND_LATE_PERCENT', (values.refundLate / 100).toString(), 'Late refund %');
       await saveOrUpdate('RESERVATION_REFUND_EARLY_PERCENT', (values.refundEarly / 100).toString(), 'Early refund %');
       await saveOrUpdate('RESERVATION_DEFAULT_DURATION_MINS', values.defaultDur.toString(), 'Default duration in mins');
     },
     onSuccess: () => {
-      // NẾU THÀNH CÔNG: Hiển thị thông báo, bắt API fetch lại dữ liệu mới, đóng popup
       message.success('Settings updated successfully!');
       queryClient.invalidateQueries({ queryKey: ['system-configs'] });
       setIsSettingsModalOpen(false);
     },
-    onError: () => message.error('Failed to update settings') // Nếu lỗi báo Error
+    onError: () => message.error('Failed to update settings')
   });
 
-  // GỌI API LẤY DANH SÁCH ĐẶT CHỖ
-  // FLOW: React Query -> GET /customer/reservations -> ReservationController 
-  // -> ReservationService -> Database (Table: reservations)
-  // -> Chuyển thành ReservationDTO (Lọc bỏ các dữ liệu nhạy cảm)
-  // -> Trả về ApiResponse JSON -> FE nhận res.data.data gắn vào biến bookingsData
+  // ==========================================
+  // [DATA]: LẤY DANH SÁCH ĐẶT CHỖ
+  // - Gọi API GET `/customer/reservations`.
+  // - Lấy danh sách toàn bộ phiên đặt chỗ (PENDING, ACTIVE, COMPLETED, CANCELLED) của khách hàng.
+  // ==========================================
   const { data: bookingsData } = useQuery({
     queryKey: ['reservations'],
     queryFn: async () => {
@@ -143,18 +130,16 @@ export const PreBookingManagementScreen = () => {
     }
   });
 
-  const allBookings = bookingsData || [];
+  const allBookings = React.useMemo(() => bookingsData || [], [bookingsData]);
 
-  // TẠI SAO LẠI LỌC 2 LẦN? 
-  // - Vì Lọc theo Ngày tháng & Từ khoá rất tốn tài nguyên máy tính (phải xử lý chuỗi, parse Object ngày).
-  // - Nên ta tách ra làm 2 tầng. Tầng 1 lọc Ngày + Từ khoá. Tầng 2 lọc Trạng thái (chỉ so sánh chuỗi === rất nhẹ).
-  // -> Giúp giao diện mượt hơn khi Manager chỉ đổi Trạng thái trên Select Box (sẽ không phải tính toán lại ngày tháng).
-
-  // TẦNG LỌC 1: LỌC THEO NGÀY VÀ TỪ KHÓA
+  // ==========================================
+  // [LOGIC]: LỌC DANH SÁCH THEO TỪ KHÓA VÀ THỜI GIAN
+  // - Bước 1: Lọc khoảng ngày (Date matching) theo `expectedEntryTime`.
+  // - Bước 2: Lọc theo text (Search keyword): Tìm theo ID, Biển số hoặc Email.
+  // ==========================================
   const baseFilteredBookings = React.useMemo(() => {
     return allBookings.filter((b: any) => {
-      // Date matching
-      // Pseudo-code Lọc ngày: Nếu ngày dự kiến (expectedEntryTime) >= Từ Ngày VÀ <= Đến Ngày thì GIỮ LẠI (return true)
+      // Lọc theo khoảng ngày (Date matching)
       let matchDate = true;
       if (filterDateRange && filterDateRange[0] && filterDateRange[1] && b.expectedEntryTime) {
         const bDate = dayjs(b.expectedEntryTime);
@@ -164,8 +149,7 @@ export const PreBookingManagementScreen = () => {
           (bDate.isBefore(end) || bDate.isSame(end));
       }
 
-      // Search matching
-      // Pseudo-code Tìm kiếm: Nếu ID hoặc Biển số hoặc Email CÓ CHỨA từ khoá thì GIỮ LẠI
+      // Lọc theo từ khóa tìm kiếm (Search matching)
       let matchSearch = true;
       if (searchKeyword) {
         const kw = searchKeyword.toLowerCase();
@@ -179,14 +163,16 @@ export const PreBookingManagementScreen = () => {
     });
   }, [allBookings, filterDateRange, searchKeyword]);
 
-  // TẦNG LỌC 2: LỌC THEO TRẠNG THÁI (Lấy mảng kết quả của Tầng 1 ra lọc tiếp)
+  // ==========================================
+  // [LOGIC]: LỌC THEO TRẠNG THÁI
+  // - Từ danh sách đã lọc ngày & từ khóa, lọc tiếp theo `filterStatus`.
+  // ==========================================
   const filteredBookings = React.useMemo(() => {
     return baseFilteredBookings.filter((b: any) => {
-      // Pseudo-code Lọc trạng thái: Nếu Filter != ALL -> Chỉ giữ lại những dòng có status == Filter
       if (filterStatus !== 'ALL') {
         return b.status === filterStatus;
       }
-      return true; // Nếu Filter = ALL thì giữ lại tất cả
+      return true;
     });
   }, [baseFilteredBookings, filterStatus]);
 
@@ -200,27 +186,23 @@ export const PreBookingManagementScreen = () => {
     setIsDrawerOpen(true);
   };
 
-  // KHAI BÁO CÁC CỘT CỦA BẢNG DATA TABLE TRÊN GIAO DIỆN
-  // Đây là cấu trúc định nghĩa cái Bảng (Table) nằm ở giữa màn hình.
-  // Mỗi Object { title: '...', dataIndex: '...' } tương ứng với 1 Cột.
-  // "render" là hàm vẽ ra giao diện của từng ô (ví dụ: vẽ ra thẻ Tag màu xanh/đỏ tùy trạng thái)
   const columns = [
     { title: 'Booking Code', dataIndex: 'id', key: 'id', render: (text: string) => <Text strong>{text}</Text> },
     { title: 'User Email', dataIndex: 'userEmail', key: 'userEmail', render: (text: string) => <Text>{text}</Text> },
-    {
-      title: 'License Plate',
-      dataIndex: 'plateNumber',
-      key: 'plateNumber',
+    { 
+      title: 'License Plate', 
+      dataIndex: 'plateNumber', 
+      key: 'plateNumber', 
       render: (text: string, record: PreBooking) => (
-        <Tag
-          color="blue"
+        <Tag 
+          color="blue" 
           className="font-bold text-base cursor-pointer hover:bg-blue-100 transition-colors"
           onClick={() => setDebugReservationId(Number(record.id))}
           title="Click to view Debug Timers"
         >
-          {text}
+          {text} 
         </Tag>
-      )
+      ) 
     },
     {
       title: 'Expected (In - Duration)',
