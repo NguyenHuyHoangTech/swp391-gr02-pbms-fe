@@ -1,33 +1,31 @@
 /**
  * @Author: Thái Tân Phú
- * @Date: 2026-07-06
- * @Description: Monthly Pass registration screen. Allows customers to buy long-term parking tickets, calculates discounts, and integrates with payment gateways.
+ * @Date: 28/07/2026
+ * @Description: Màn hình Đăng ký Vé tháng (Monthly Pass) - Cho phép khách hàng chọn loại xe, biển số, thời hạn và thanh toán qua cổng điện tử.
  * @Dependencies: 
- * - React Query (pricing, vehicle-types, payments)
- * - AxiosClient
- * - Zustand (useAuthStore)
+ * - React, antd
+ * - axiosClient, react-query, dayjs
  */
 import { simulatedDayjs } from '../../core/utils/timeProvider';
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Button, Typography, Space, DatePicker, message, Spin, Radio, Input, Modal, Row, Col, QRCode } from 'antd';
-import { IdcardOutlined, CarOutlined, CreditCardOutlined, CheckCircleOutlined, UserOutlined, CalendarOutlined, NumberOutlined } from '@ant-design/icons';
+import { Card, Button, Typography, Space, DatePicker, message, Spin, Input, Modal, QRCode } from 'antd';
+import { IdcardOutlined, CarOutlined, CreditCardOutlined, CheckCircleOutlined, UserOutlined, CalendarOutlined, NumberOutlined, WarningOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAuthStore } from '../../core/store/useAuthStore';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import axiosClient from '../../core/api/axiosClient';
 import { getImageUrl as getGlobalImageUrl } from '../../core/utils/imageHelper';
+import { normalizePlateNumber } from '../../core/utils/licensePlateUtils';
 const { Title, Text } = Typography;
 
-// Configuration for Monthly Packages (Discounts applied)
 const BASE_PACKAGES = [
   { id: 1, name: '1 month' },
-  { id: 3, name: '3 Months' }, 
-  { id: 6, name: '6 Months' }, 
-  { id: 12, name: '12 Months' }, 
+  { id: 3, name: '3 Months' },
+  { id: 6, name: '6 Months' },
+  { id: 12, name: '12 Months' },
 ];
 
-// Configuration for Payment Gateways
 const GATEWAYS = [
   { id: 'PAYPAL', name: 'PayPal Sandbox', icon: '/paypal_logo.webp' },
   { id: 'PAYOS', name: 'PayOS (VietQR)', icon: getGlobalImageUrl('/uploads/PayOS_Icon.webp') }
@@ -35,28 +33,29 @@ const GATEWAYS = [
 
 export const CustomerMonthlyPassScreen = () => {
   const navigate = useNavigate();
-  // 1. Get user info from global store (Zustand)
   const email = useAuthStore(state => state.email);
   const name = useAuthStore(state => state.name);
-  
-  // 2. Form States
+
   const [fullName, setFullName] = useState<string>('');
   const [selectedVehicle, setSelectedVehicle] = useState<number | null>(null);
   const [plateNumber, setPlateNumber] = useState<string>('');
   const [selectedDuration, setSelectedDuration] = useState<number>(1);
   const [startDate, setStartDate] = useState<dayjs.Dayjs>(simulatedDayjs());
-  
-  // 3. Payment & Modal States
+
   const [selectedGateway, setSelectedGateway] = useState<string>('PAYPAL');
-  
+
   const [isQRModalVisible, setIsQRModalVisible] = useState(false);
   const [countdown, setCountdown] = useState(60);
   const [isPaymentSuccess, setIsPaymentSuccess] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyCooldown, setVerifyCooldown] = useState(0);
   const [paymentUrl, setPaymentUrl] = useState<string>('');
   const [paymentQrCode, setPaymentQrCode] = useState<string>('');
   const [paymentOrderId, setPaymentOrderId] = useState<string>('');
 
-  // 5. Fetch Pricing Policies & Vehicle Types from API
+  // ==========================================
+  // [DATA]: LẤY BẢNG GIÁ DỊCH VỤ (PRICING POLICIES)
+  // ==========================================
   const { data: pricingPolicies = [], isLoading: isPricingLoading } = useQuery({
     queryKey: ['public-pricing'],
     queryFn: async () => {
@@ -65,6 +64,9 @@ export const CustomerMonthlyPassScreen = () => {
     }
   });
 
+  // ==========================================
+  // [DATA]: LẤY DANH SÁCH LOẠI PHƯƠNG TIỆN
+  // ==========================================
   const { data: vehicleTypes = [] } = useQuery({
     queryKey: ['public-vehicle-types'],
     queryFn: async () => {
@@ -73,6 +75,9 @@ export const CustomerMonthlyPassScreen = () => {
     }
   });
 
+  // ==========================================
+  // [DATA]: LẤY CẤU HÌNH GIẢM GIÁ (DISCOUNT)
+  // ==========================================
   const { data: discountConfig = {} } = useQuery({
     queryKey: ['config-discounts'],
     queryFn: async () => {
@@ -81,12 +86,21 @@ export const CustomerMonthlyPassScreen = () => {
     }
   });
 
+  // ==========================================
+  // [LOGIC]: TÍNH TOÁN CÁC GÓI THỜI GIAN
+  // - Lấy danh sách gói cơ bản (1, 3, 6, 12 tháng).
+  // - Áp dụng mức giảm giá (discount) lấy từ cấu hình API tương ứng với từng gói.
+  // ==========================================
   const PACKAGES = BASE_PACKAGES.map(p => ({
     ...p,
     discount: discountConfig[p.id.toString()] || 0
   }));
 
-  // 6. Map backend vehicles with their monthly prices
+  // ==========================================
+  // [LOGIC]: XÂY DỰNG DANH SÁCH XE (DYNAMIC VEHICLES)
+  // - Map (kết hợp) dữ liệu bảng giá (pricingPolicies) và loại xe (vehicleTypes).
+  // - Trả về mảng chứa id, tên loại xe, icon và giá cước theo tháng.
+  // ==========================================
   const dynamicVehicles = pricingPolicies.map((p: any) => {
     const vt = vehicleTypes.find((v: any) => v.id === p.vehicleTypeId);
     return {
@@ -97,47 +111,35 @@ export const CustomerMonthlyPassScreen = () => {
     };
   });
 
-  // 4. Auto-fill full name if available in store
+  // ==========================================
+  // [EFFECT]: TỰ ĐỘNG ĐIỀN HỌ TÊN NẾU ĐÃ ĐĂNG NHẬP
+  // ==========================================
   useEffect(() => {
     if (name) {
       setFullName(name);
     }
   }, [name]);
 
-  // 7. Business Logic: Calculate Fees & Discounts
+  // ==========================================
+  // [LOGIC]: TÍNH TOÁN CƯỚC PHÍ VÉ THÁNG
+  // - Dựa trên loại xe, thời hạn (tháng) và cấu hình giảm giá để ra tổng tiền cuối cùng.
+  // ==========================================
   const vehicleConfig = dynamicVehicles.find((v: any) => v.id === selectedVehicle);
   const packageConfig = PACKAGES.find(p => p.id === selectedDuration);
-  
+
   const baseFee = (vehicleConfig?.pricePerMonth || 0) * selectedDuration;
   const discountAmount = baseFee * (packageConfig?.discount || 0);
   const totalFee = baseFee - discountAmount;
 
   const endDate = startDate.add(selectedDuration, 'month');
 
-  const createPassMutation = useMutation({
-    mutationFn: async () => {
-      const res = await axiosClient.post('/operation/monthly-tickets', {
-        vehicleTypeId: selectedVehicle,
-        plateNumber: plateNumber,
-        duration: selectedDuration
-      });
-      return res.data;
-    },
-    onSuccess: () => {
-      setCountdown(5);
-      setIsPaymentSuccess(true);
-      message.success('Payment Success! Your Monthly Pass has been activated');
-      setTimeout(() => {
-        navigate('/customer/my-parking?tab=monthly');
-      }, 2000);
-    },
-    onError: () => {
-      message.error('an error occurred when registering for Monthly Pass');
-      setIsQRModalVisible(false);
-    }
-  });
 
-  // 9. Mutation: Generate Payment Link
+  // ==========================================
+  // [API]: TẠO LINK THANH TOÁN (INITIALIZE PAYMENT)
+  // - Bước 1: Ghép các payload gồm: thông tin cá nhân, loại xe, thời hạn.
+  // - Bước 2: Post dữ liệu xuống '/finance/payments/initialize' với số tiền và cổng thanh toán.
+  // - Bước 3: Nhận URL/QR trả về, bóc tách lấy OrderID (token với PayPal hoặc orderId với PayOS).
+  // ==========================================
   const generateLinkMutation = useMutation({
     mutationFn: async () => {
       const payload = {
@@ -147,7 +149,7 @@ export const CustomerMonthlyPassScreen = () => {
         validFrom: startDate.format('YYYY-MM-DDTHH:mm:ss'),
         durationMonths: selectedDuration
       };
-      
+
       const res = await axiosClient.post('/finance/payments/initialize', {
         actionType: 'CREATE_MONTHLY_TICKET',
         amount: totalFee,
@@ -176,13 +178,18 @@ export const CustomerMonthlyPassScreen = () => {
     }
   });
 
-  // 10. Handle Confirm Button Click
+  // ==========================================
+  // [ACTION]: XÁC NHẬN ĐĂNG KÝ VÀ MỞ MODAL THANH TOÁN
+  // - Bước 1: Validate thông tin (Họ tên, Loại xe, Biển số, Ngày hiệu lực).
+  // - Bước 2: Reset trạng thái thanh toán (countdown, url, mã đơn).
+  // - Bước 3: Hiện Modal chứa mã QR và gọi mutation tạo link thanh toán (generateLinkMutation).
+  // ==========================================
   const handleConfirm = () => {
     if (!fullName.trim()) return message.error('Please enter Full Name');
     if (!selectedVehicle) return message.error('Please select Vehicle type');
     if (!plateNumber.trim()) return message.error('Please enter vehicle License Plate');
     if (!startDate) return message.error('Please select an effective date');
-    
+
     setIsQRModalVisible(true);
     setIsPaymentSuccess(false);
     setPaymentUrl('');
@@ -193,62 +200,158 @@ export const CustomerMonthlyPassScreen = () => {
 
   useEffect(() => {
     let timer: any;
+    if (verifyCooldown > 0) {
+      timer = setTimeout(() => setVerifyCooldown(c => c - 1), 1000);
+    }
+    return () => clearTimeout(timer);
+  }, [verifyCooldown]);
+
+  // ==========================================
+  // [ACTION]: XÁC MINH THANH TOÁN THỦ CÔNG
+  // - Dùng khi WebSocket bị lỗi hoặc người dùng muốn chủ động kiểm tra.
+  // - Bước 1: Gọi API capture của cổng thanh toán tương ứng (PAYOS / PAYPAL).
+  // - Bước 2: Nếu thành công, gọi API 'execute-action' để tạo vé tháng trên hệ thống.
+  // - Bước 3: Hiển thị thông báo, đóng Modal và chuyển hướng sang danh sách quản lý.
+  // ==========================================
+  const handleManualVerify = () => {
+    if (!paymentOrderId || verifyCooldown > 0) return;
+    setIsVerifying(true);
+    const captureUrl = selectedGateway === 'PAYOS' ? '/finance/payments/payos/capture' : '/finance/payments/paypal/capture';
+
+    axiosClient.post(captureUrl, { token: paymentOrderId })
+      .then(res => {
+        if (res.data?.data?.status === 'COMPLETED') {
+          axiosClient.post('/finance/payments/execute-action', { token: paymentOrderId })
+            .then(() => {
+              message.success('Monthly Pass registered successfully!');
+              setIsPaymentSuccess(true);
+              setIsQRModalVisible(false);
+              setTimeout(() => {
+                navigate('/customer/my-parking?tab=monthly');
+              }, 2000);
+            })
+            .catch(execErr => {
+              message.error(execErr.response?.data?.message || 'System failed to process ticket. Your payment has been queued for a refund.');
+              setIsQRModalVisible(false);
+            });
+        } else {
+          message.warning('Payment not yet completed on the gateway.');
+        }
+      })
+      .catch(err => {
+        if (err.response?.status === 400) {
+          message.warning('Payment not yet received. Please try again later.');
+        } else {
+          message.error('System is busy or unable to verify.');
+        }
+      })
+      .finally(() => {
+        setIsVerifying(false);
+        setVerifyCooldown(10);
+      });
+  };
+
+  // ==========================================
+  // [EFFECT]: BỘ ĐẾM NGƯỢC 60 GIÂY CHO QR THANH TOÁN
+  // ==========================================
+  useEffect(() => {
+    let timer: any;
     if (isQRModalVisible && !isPaymentSuccess && paymentOrderId) {
       if (countdown > 0) {
         timer = setTimeout(() => {
           setCountdown(c => c - 1);
-          if (countdown % 3 === 0) {
-            // Logic gọi Backend hỏi xem Khách đã trả tiền chưa
-            const captureUrl = selectedGateway === 'PAYOS' ? '/finance/payments/payos/capture' : '/finance/payments/paypal/capture';
-            axiosClient.post(captureUrl, { token: paymentOrderId })
-              .then(res => {
-                if (res.data?.data?.status === 'COMPLETED') { // Khách đã quét QR trả tiền!
-                  // Execute Business Logic
-                  axiosClient.post('/finance/payments/execute-action', { token: paymentOrderId })
-                    .then(execRes => {
-                       message.success('Monthly Pass registered successfully!');
-                       setIsPaymentSuccess(true);
-                       setIsQRModalVisible(false);
-                       setTimeout(() => {
-                         navigate('/customer/my-parking?tab=monthly');
-                       }, 2000);
-                    })
-                    .catch(execErr => {
-                       message.error(execErr.response?.data?.message || 'System failed to process ticket. Your payment has been queued for a full refund.');
-                       setIsQRModalVisible(false);
-                       clearTimeout(timer);
-                    });
-                }
-              })
-              .catch(() => {});
-          }
         }, 1000);
-      } else {
+      }
+    }
+    return () => clearTimeout(timer);
+  }, [isQRModalVisible, isPaymentSuccess, paymentOrderId, countdown]);
+
+  // ==========================================
+  // [EFFECT]: WEBSOCKET LẮNG NGHE KẾT QUẢ THANH TOÁN
+  // - Khi người dùng chuyển khoản xong, Backend nhận được webhook sẽ đẩy tin nhắn qua WebSocket để tự động đóng Modal và báo thành công.
+  // ==========================================
+  useEffect(() => {
+    let client: any = null;
+    let subscription: any = null;
+
+    if (isQRModalVisible && !isPaymentSuccess && paymentOrderId) {
+      import('@stomp/stompjs').then(({ Client }) => {
+        client = new Client({
+          brokerURL: window.location.protocol === 'https:' ? `wss://${window.location.host}/ws-pbms` : `ws://${window.location.host}/ws-pbms`,
+          reconnectDelay: 5000,
+        });
+
+        client.onConnect = () => {
+          subscription = client.subscribe(`/topic/payments/${paymentOrderId}`, (messageBody: any) => {
+            const payload = JSON.parse(messageBody.body);
+            if (payload.status === 'SUCCESS') {
+              message.success('Monthly Pass registered successfully!');
+              setIsPaymentSuccess(true);
+              setIsQRModalVisible(false);
+              setTimeout(() => {
+                navigate('/customer/my-parking?tab=monthly');
+              }, 2000);
+            } else if (payload.status === 'FAILED') {
+              message.error(payload.message || 'System failed to process ticket. Your payment has been queued for a full refund.');
+              setIsQRModalVisible(false);
+            }
+          });
+        };
+
+        client.activate();
+      });
+    }
+
+    return () => {
+      if (subscription) subscription.unsubscribe();
+      if (client) client.deactivate();
+    };
+  }, [isQRModalVisible, isPaymentSuccess, paymentOrderId, navigate]);
+
+  // ==========================================
+  // [HELPER]: LẤY ĐƯỜNG DẪN ẢNH TUYỆT ĐỐI
+  // - Nếu là link ngoài (http) thì giữ nguyên.
+  // - Nếu là đường dẫn tương đối thì ghép với BASE_URL của Backend.
+  // ==========================================
+  const getImageUrl = (url: string) => {
+    if (!url) return '';
+    if (url.startsWith('http')) return url;
+    const baseUrl = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api/v1', '') : 'http://localhost:8080';
+    return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/20 to-indigo-50/30 flex flex-col relative pb-12 font-sans">
+      <div className="p-4 md:p-6 bg-white/80 backdrop-blur-md shadow-sm sticky top-16 z-10 border-b border-white/50">
+        <Title level={3} className="m-0 text-slate-800 flex items-center text-xl md:text-2xl">
+          <IdcardOutlined className="mr-3 text-blue-600" />  Sign up for Monthly Passes
+        </Title>
         <Text type="secondary" className="text-slate-500 text-sm md:text-base">Register to reserve a long-term parking space with many attractive incentives</Text>
       </div>
 
       <div className="max-w-7xl mx-auto w-full p-4 md:p-6 mt-2 md:mt-4 grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8 items-start">
-        
+
         {/* LEFT COLUMN: Input Form */}
         <div className="lg:col-span-2 space-y-6">
-          
+
           {/* 1. Personal Information */}
-          <Card title={<span className="font-black text-xl"><UserOutlined className="mr-2 text-blue-600"/>1. Ticket holder information</span>} className="shadow-xl rounded-3xl border-0 bg-white/90 backdrop-blur-md hover:shadow-2xl transition-shadow duration-300">
+          <Card title={<span className="font-black text-xl"><UserOutlined className="mr-2 text-blue-600" />1. Ticket holder information</span>} className="shadow-xl rounded-3xl border-0 bg-white/90 backdrop-blur-md hover:shadow-2xl transition-shadow duration-300">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
                 <Text className="block font-bold mb-2 text-slate-700">Full name:</Text>
-                <Input 
-                  size="large" 
-                  placeholder="Enter first and last name" 
+                <Input
+                  size="large"
+                  placeholder="Enter first and last name"
                   value={fullName}
-                  onChange={e => setFullName(e.target.value)}
-                  className="rounded-lg h-12"
+                  disabled
+                  className="rounded-lg h-12 bg-slate-100 text-slate-500"
                 />
+                <Text className="text-xs text-slate-400 mt-1 block">Name is automatically taken from account. Update in Settings if needed.</Text>
               </div>
               <div>
                 <Text className="block font-bold mb-2 text-slate-700">Email to receive invoice:</Text>
-                <Input 
-                  size="large" 
+                <Input
+                  size="large"
                   value={email || 'customer@example.com'}
                   disabled
                   className="rounded-lg h-12 bg-slate-100 text-slate-500"
@@ -259,11 +362,11 @@ export const CustomerMonthlyPassScreen = () => {
           </Card>
 
           {/* 2. Vehicle Information */}
-          <Card title={<span className="font-black text-xl"><CarOutlined className="mr-2 text-green-600"/>2. Vehicle registration</span>} className="shadow-xl rounded-3xl border-0 bg-white/90 backdrop-blur-md hover:shadow-2xl transition-shadow duration-300">
+          <Card title={<span className="font-black text-xl"><CarOutlined className="mr-2 text-green-600" />2. Vehicle registration</span>} className="shadow-xl rounded-3xl border-0 bg-white/90 backdrop-blur-md hover:shadow-2xl transition-shadow duration-300">
             <div className="mb-6">
               <Text className="block font-bold mb-3 text-slate-700">Vehicle Type:</Text>
               {isPricingLoading ? (
-                 <Spin />
+                <Spin />
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {dynamicVehicles.map((v: any) => (
@@ -273,7 +376,7 @@ export const CustomerMonthlyPassScreen = () => {
                       className={`cursor-pointer p-6 rounded-2xl border-0 shadow-md transition-all duration-300 flex flex-col items-center justify-center ${selectedVehicle === v.id ? 'ring-4 ring-green-500 bg-green-50 text-green-800 scale-105 shadow-xl' : 'bg-white hover:ring-2 hover:ring-green-300 hover:shadow-lg'}`}
                     >
                       {v.iconUrl ? (
-                        <img src={getGlobalImageUrl(v.iconUrl)} alt={v.name} className="h-10 w-10 object-contain mb-2" />
+                        <img src={getImageUrl(v.iconUrl)} alt={v.name} className="h-10 w-10 object-contain mb-2" />
                       ) : (
                         <CarOutlined className="text-3xl mb-2" />
                       )}
@@ -287,19 +390,19 @@ export const CustomerMonthlyPassScreen = () => {
 
             <div>
               <Text className="block font-bold mb-2 text-slate-700">License Plate:</Text>
-              <Input 
-                size="large" 
+              <Input
+                size="large"
                 prefix={<NumberOutlined className="text-slate-400" />}
-                placeholder="For example: 51H-123e45" 
+                placeholder="For example: 51H-123e45"
                 value={plateNumber}
-                onChange={e => setPlateNumber(e.target.value.toUpperCase())}
+                onChange={e => setPlateNumber(normalizePlateNumber(e.target.value))}
                 className="rounded-lg h-12 text-lg font-mono font-bold uppercase"
               />
             </div>
           </Card>
 
           {/* 3. Duration & Start Date */}
-          <Card title={<span className="font-black text-xl"><CalendarOutlined className="mr-2 text-orange-600"/>3. Package Monthly Passes & Validity</span>} className="shadow-xl rounded-3xl border-0 bg-white/90 backdrop-blur-md hover:shadow-2xl transition-shadow duration-300">
+          <Card title={<span className="font-black text-xl"><CalendarOutlined className="mr-2 text-orange-600" />3. Package Monthly Passes & Validity</span>} className="shadow-xl rounded-3xl border-0 bg-white/90 backdrop-blur-md hover:shadow-2xl transition-shadow duration-300">
             <div className="mb-6">
               <Text className="block font-bold mb-3 text-slate-700">Choose Time package:</Text>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
@@ -323,22 +426,22 @@ export const CustomerMonthlyPassScreen = () => {
             <div>
               <Text className="block font-bold mb-2 text-slate-700">Effective Start Date:</Text>
               <div className="hidden md:block">
-                <DatePicker 
-                  format="DD/MM/YYYY" 
+                <DatePicker
+                  format="DD/MM/YYYY"
                   value={startDate}
-                  onChange={(val) => val && setStartDate(val)} 
-                  className="w-full md:w-1/2 h-12 rounded-lg text-lg" 
+                  onChange={(val) => val && setStartDate(val)}
+                  className="w-full md:w-1/2 h-12 rounded-lg text-lg"
                   minDate={simulatedDayjs()}
                   inputReadOnly={true}
                 />
               </div>
               <div className="block md:hidden">
-                <input 
+                <input
                   type="date"
                   className="w-full h-12 rounded-lg border border-slate-300 px-3 text-slate-700 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 bg-white text-base"
                   value={startDate.format('YYYY-MM-DD')}
                   min={simulatedDayjs().format('YYYY-MM-DD')}
-                  onChange={(e) => { if(e.target.value) setStartDate(dayjs(e.target.value)) }}
+                  onChange={(e) => { if (e.target.value) setStartDate(dayjs(e.target.value)) }}
                 />
               </div>
             </div>
@@ -349,25 +452,25 @@ export const CustomerMonthlyPassScreen = () => {
         {/* RIGHT COLUMN: Sticky Summary */}
         <div className="lg:col-span-1">
           <div className="lg:sticky lg:top-24 space-y-6">
-            
+
             <Card title={<span className="font-black text-xl text-slate-800">Payment Invoice</span>} className="shadow-2xl rounded-3xl border-0 overflow-hidden backdrop-blur-md bg-white/90" headStyle={{ backgroundColor: 'rgba(248, 250, 252, 0.8)', borderBottom: '1px solid rgba(226, 232, 240, 0.5)' }}>
               <Space direction="vertical" className="w-full" size="middle">
-                
+
                 <div className="flex justify-between border-b border-dashed border-slate-200 pb-3">
                   <Text className="text-slate-500">Card holder:</Text>
                   <Text strong className="text-slate-800 text-right max-w-[150px] truncate">{fullName || '---'}</Text>
                 </div>
-                
+
                 <div className="flex justify-between border-b border-dashed border-slate-200 pb-3">
                   <Text className="text-slate-500">Vehicle Type:</Text>
                   <Text strong className="text-slate-800">{vehicleConfig?.name || '---'} <span className="text-slate-400 font-normal">({plateNumber || 'Not entered yet'})</span></Text>
                 </div>
-                
+
                 <div className="flex justify-between border-b border-dashed border-slate-200 pb-3">
                   <Text className="text-slate-500">Duration:</Text>
                   <Text strong className="text-slate-800 text-right">
                     {selectedDuration} month(s)
-                                                          <br/><span className="text-xs text-blue-500 font-normal">({startDate.format('DD/MM/YYYY')} - {endDate.format('DD/MM/YYYY')})</span>
+                    <br /><span className="text-xs text-blue-500 font-normal">({startDate.format('DD/MM/YYYY')} - {endDate.format('DD/MM/YYYY')})</span>
                   </Text>
                 </div>
 
@@ -382,7 +485,7 @@ export const CustomerMonthlyPassScreen = () => {
                     <Text strong className="text-green-600">- {discountAmount.toLocaleString()} VND</Text>
                   </div>
                 )}
-                
+
                 <div className="bg-slate-50 p-4 rounded-lg mt-2 flex justify-between items-center border border-slate-200">
                   <Text strong className="text-slate-600">TOTAL AMOUNT:</Text>
                   <Text className="text-2xl font-black text-blue-600">{totalFee.toLocaleString()} VND</Text>
@@ -390,18 +493,18 @@ export const CustomerMonthlyPassScreen = () => {
               </Space>
             </Card>
 
-            <Card title={<span className="font-black text-xl"><CreditCardOutlined className="mr-2 text-purple-600"/>Payment method</span>} className="shadow-xl rounded-3xl border-0 bg-white/90 backdrop-blur-md mt-6">
+            <Card title={<span className="font-black text-xl"><CreditCardOutlined className="mr-2 text-purple-600" />Payment method</span>} className="shadow-xl rounded-3xl border-0 bg-white/90 backdrop-blur-md mt-6">
               <div className="w-full flex flex-col space-y-4">
                 {GATEWAYS.map(gw => {
                   const isSelected = selectedGateway === gw.id;
                   return (
-                    <div 
+                    <div
                       key={gw.id}
                       onClick={() => setSelectedGateway(gw.id)}
                       className={`relative overflow-hidden cursor-pointer flex items-center px-5 py-4 rounded-2xl transition-all duration-300 ${isSelected ? 'ring-2 ring-purple-500 bg-purple-50 shadow-md transform scale-[1.02]' : 'ring-1 ring-slate-200 bg-white hover:ring-purple-300 hover:shadow-sm'}`}
                     >
                       <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center mr-4 transition-colors ${isSelected ? 'border-purple-600' : 'border-slate-300'}`}>
-                         {isSelected && <div className="w-3 h-3 rounded-full bg-purple-600 shadow-sm" />}
+                        {isSelected && <div className="w-3 h-3 rounded-full bg-purple-600 shadow-sm" />}
                       </div>
                       <div className="flex items-center flex-1">
                         <div className="w-16 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm border border-slate-100 p-1 mr-4">
@@ -415,15 +518,15 @@ export const CustomerMonthlyPassScreen = () => {
               </div>
             </Card>
 
-            <Button 
-              type="primary" 
-              size="large" 
+            <Button
+              type="primary"
+              size="large"
               className="w-full h-16 mt-6 text-xl font-black shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 bg-gradient-to-r from-blue-600 to-indigo-600 border-0 rounded-2xl animate-pulse"
               onClick={handleConfirm}
             >
-              
-                                        Confirm Registration
-                                      </Button>
+
+              Confirm Registration
+            </Button>
           </div>
         </div>
 
@@ -444,7 +547,7 @@ export const CustomerMonthlyPassScreen = () => {
             <>
               <Title level={4} className="mb-2 text-slate-800">Scan QR code to pay</Title>
               <Text className="block mb-6 text-slate-500">Open the Banking or eWallet app</Text>
-              
+
               <div className="relative inline-block mb-6">
                 <div className="bg-white p-4 border-2 border-dashed border-slate-300 rounded-2xl shadow-sm relative z-10 flex justify-center items-center h-[240px] w-[240px]">
                   {paymentUrl ? <QRCode value={selectedGateway === 'PAYOS' && paymentQrCode ? paymentQrCode : paymentUrl} size={200} /> : <Spin size="large" />}
@@ -461,7 +564,7 @@ export const CustomerMonthlyPassScreen = () => {
                 </style>
                 {paymentUrl && <div className="absolute top-2 left-2 w-[calc(100%-16px)] h-1 bg-green-500 shadow-[0_0_15px_#22c55e] z-20" style={{ animation: 'scan 2s ease-in-out infinite' }}></div>}
               </div>
-              
+
               <div className="text-2xl font-black text-blue-600 mb-2">{totalFee.toLocaleString()} VND</div>
               <Text className="block text-slate-500 mb-6 font-mono bg-slate-100 py-2 rounded-lg break-all px-2 text-xs">
                 {selectedGateway === 'PAYOS' ? (
@@ -470,11 +573,32 @@ export const CustomerMonthlyPassScreen = () => {
                   <a href={paymentUrl} target="_blank" rel="noreferrer">Open PayPal Checkout</a>
                 )}
               </Text>
-              
-              <div className="flex items-center justify-center space-x-2 text-slate-600">
-                <Spin size="small" />
-                <Text>Awaiting payment ({countdown}s)...</Text>
-              </div>
+
+              {countdown > 0 ? (
+                <div className="flex items-center justify-center space-x-2 text-slate-600 mb-2">
+                  <Spin size="small" />
+                  <Text>Awaiting payment ({countdown}s)...</Text>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center space-x-2 text-orange-600 mb-2 bg-orange-50 p-2 rounded-lg border border-orange-200">
+                  <WarningOutlined />
+                  <Text className="text-orange-600 font-semibold text-center">Auto-verification timeout. Please confirm manually if you have paid.</Text>
+                </div>
+              )}
+
+              {paymentUrl && paymentOrderId && (
+                <div className="mb-4 text-center">
+                  <Button
+                    type="link"
+                    onClick={handleManualVerify}
+                    loading={isVerifying}
+                    disabled={verifyCooldown > 0}
+                    className={`font-semibold ${verifyCooldown > 0 ? 'text-slate-400' : 'text-orange-600'}`}
+                  >
+                    {verifyCooldown > 0 ? `Please wait ${verifyCooldown}s to verify again` : 'I have paid but the screen hasn\'t updated. Verify now!'}
+                  </Button>
+                </div>
+              )}
             </>
           ) : (
             <div className="animate-fade-in py-8">
