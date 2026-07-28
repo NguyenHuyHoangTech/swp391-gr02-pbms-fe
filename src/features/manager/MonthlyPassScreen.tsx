@@ -1,23 +1,19 @@
 /**
  * @Author: Thái Tân Phú
- * @Date: 2026-07-18
- * @Description: Màn hình quản lý Vé Tháng (Monthly Pass Management) dành cho Manager.
- * Tính năng chính:
- * 1. Xem danh sách khách hàng đăng ký vé tháng (Lọc theo trạng thái, loại xe, bãi đỗ).
- * 2. Cấu hình tỷ lệ cảnh báo quá tải (Threshold) và Mức giảm giá (Discounts) cho vé tháng.
- * 3. Tích hợp WebSocket nhận cảnh báo realtime khi bãi đỗ xe vượt ngưỡng (Overload).
+ * @Date: 28/07/2026
+ * @Description: Màn hình Quản lý Vé tháng (Monthly Pass Management) dành cho Quản lý. Bao gồm việc cấu hình mức cảnh báo (Threshold), tỷ lệ giảm giá, và theo dõi trạng thái các vé tháng.
  * @Dependencies: 
- * - axiosClient: Call API (/operation/monthly-tickets, configs)
- * - useWebSocket: Kênh '/topic/manager-alerts'
+ * - React, antd
+ * - axiosClient, react-query, WebSocket
  */
 import React, { useState } from 'react';
 import {
-  Card, Typography, Table, Tag, Button, Space, Input, Select,
-  Alert, Statistic, Row, Col, Drawer, Tabs, Timeline, Divider
+  Card, Typography, Table, Tag, Button, Input, Select,
+  Statistic, Row, Col, Drawer, Tabs, Divider
 } from 'antd';
 import {
   IdcardOutlined, SearchOutlined, CheckCircleOutlined,
-  CloseCircleOutlined, FilterOutlined, MoreOutlined,
+  MoreOutlined,
   ExclamationCircleOutlined, HistoryOutlined, UserOutlined, CarOutlined, SettingOutlined
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
@@ -27,8 +23,6 @@ import axiosClient from '../../core/api/axiosClient';
 
 const { Title, Text } = Typography;
 
-// KHUÔN MẪU DỮ LIỆU (INTERFACE)
-// Cấu trúc 1 thẻ Vé tháng trả về từ API lấy danh sách
 interface MonthlyPass {
   id: string;
   user: string;
@@ -39,46 +33,44 @@ interface MonthlyPass {
   status: 'ACTIVE' | 'EXPIRING_SOON' | 'EXPIRED' | 'CANCELED' | 'PENDING' | string;
   startDate: string;
   endDate: string;
-  inParkingLot?: boolean; // True = Khách đang gửi xe trong bãi | False = Xe đang ở ngoài
+  inParkingLot?: boolean;
 }
 
 export const MonthlyPassScreen = () => {
-  // STATE: ĐIỀU KHIỂN GIAO DIỆN CHUNG
-  const [selectedRecord, setSelectedRecord] = useState<MonthlyPass | null>(null); // Dữ liệu khách hàng đang xem chi tiết
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false); // Bật/tắt ngăn kéo bên phải
-
-  // STATE: MODAL CẤU HÌNH (THRESHOLD & DISCOUNT)
+  const [selectedRecord, setSelectedRecord] = useState<MonthlyPass | null>(null);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = React.useState(false);
-  const [isConfigDirty, setIsConfigDirty] = React.useState(false); // Cờ đánh dấu có thay đổi config chưa (để bật nút Save)
-  const [threshold, setThreshold] = React.useState<number>(90); // Mức % cảnh báo quá tải bãi xe
-  const [discounts, setDiscounts] = useState<{ [key: string]: number }>({ '1': 0, '3': 5, '6': 10, '12': 15 }); // % Giảm giá theo tháng
-
-  // WEBSOCKET: Kênh kết nối Real-time
+  const [isConfigDirty, setIsConfigDirty] = React.useState(false);
+  const [threshold, setThreshold] = React.useState<number>(90);
   const { stompClient, connected } = useWebSocket();
+  const [discounts, setDiscounts] = useState<{ [key: string]: number }>({ '1': 0, '3': 5, '6': 10, '12': 15 });
 
-  // STATE: BỘ LỌC TÌM KIẾM
   const [filterType, setFilterType] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [filterParking, setFilterParking] = useState('ALL');
   const [searchKeyword, setSearchKeyword] = useState('');
 
-  // EFFECT: Kéo cấu hình (Threshold & Discount) từ Backend ngay khi vừa load trang
-  React.useEffect(() => {
-    fetchThreshold();
-    fetchDiscounts();
-  }, []);
-
+  // ==========================================
+  // [DATA]: LẤY CẤU HÌNH THRESHOLD
+  // - Bước 1: Gọi API GET `/operation/monthly-tickets/config-threshold`.
+  // - Bước 2: Lưu kết quả vào state `threshold` (mức cảnh báo sắp hết hạn).
+  // ==========================================
   const fetchThreshold = async () => {
     try {
       const res = await axiosClient.get('/operation/monthly-tickets/config-threshold');
       if (res.data.data) {
         setThreshold(res.data.data);
       }
-    } catch (e) {
-      console.error(e);
+    } catch {
+      console.error('Lỗi khi fetch threshold');
     }
   };
 
+  // ==========================================
+  // [DATA]: LẤY CẤU HÌNH GIẢM GIÁ
+  // - Bước 1: Gọi API GET `/operation/monthly-tickets/config-discounts`.
+  // - Bước 2: Chuyển đổi dữ liệu (nhân 100) và lưu vào state `discounts`.
+  // ==========================================
   const fetchDiscounts = async () => {
     try {
       const res = await axiosClient.get('/operation/monthly-tickets/config-discounts');
@@ -91,19 +83,28 @@ export const MonthlyPassScreen = () => {
           '12': (data['12'] || 0) * 100,
         });
       }
-    } catch (e) {
-      console.error(e);
+    } catch {
+      console.error('Lỗi khi fetch discounts');
     }
   };
 
-  // HÀM: LƯU CẤU HÌNH XUỐNG BACKEND (PUT/POST APIs)
+  React.useEffect(() => {
+    const init = async () => {
+      await fetchThreshold();
+      await fetchDiscounts();
+    };
+    init();
+  }, []);
+
+  // ==========================================
+  // [API]: LƯU CẤU HÌNH (THRESHOLD & DISCOUNTS)
+  // - Bước 1: Gọi API PUT `/operation/monthly-tickets/config-threshold` để lưu `threshold`.
+  // - Bước 2: Gọi API POST `/operation/monthly-tickets/config-discounts` để lưu mảng `discounts` (chia 100).
+  // - Bước 3: Đóng Modal và hiển thị thông báo thành công.
+  // ==========================================
   const handleSaveConfig = async () => {
     try {
-      // 1. Lưu cấu hình cảnh báo quá tải
       await axiosClient.put('/operation/monthly-tickets/config-threshold', { threshold });
-      
-      // 2. Lưu cấu hình giảm giá (Chuyển từ % (số nguyên) sang số thập phân (float) trước khi gửi BE)
-      // Ví dụ: Nhập 15% -> Gửi BE là 0.15
       await axiosClient.post('/operation/monthly-tickets/config-discounts', {
         '1': discounts['1'] / 100,
         '3': discounts['3'] / 100,
@@ -112,15 +113,17 @@ export const MonthlyPassScreen = () => {
       });
       notification.success({ message: 'Configuration saved successfully!' });
       setIsConfigModalOpen(false);
-      setIsConfigDirty(false); // Reset cờ
-    } catch (e) {
+      setIsConfigDirty(false);
+    } catch {
       notification.error({ message: 'Error saving configuration' });
     }
   };
 
-  // EFFECT: LẮNG NGHE WEBSOCKET (REAL-TIME ALERTS)
-  // Logic: Lắng nghe kênh '/topic/manager-alerts'. 
-  // Nếu BE đẩy thông báo bãi quá tải (MONTHLY_ZONE_OVERLOAD) -> Mở Popup Cảnh báo ngay lập tức!
+  // ==========================================
+  // [EFFECT]: WEBSOCKET LẮNG NGHE CẢNH BÁO QUÁ TẢI (OVERLOAD)
+  // - Bước 1: Đăng ký lắng nghe `/topic/manager-alerts`.
+  // - Bước 2: Nếu nhận được tin nhắn có `type === 'MONTHLY_ZONE_OVERLOAD'`, hiển thị thông báo cảnh báo (Notification) lên góc màn hình.
+  // ==========================================
   React.useEffect(() => {
     if (stompClient && connected) {
       const subscription = stompClient.subscribe('/topic/manager-alerts', (message) => {
@@ -136,7 +139,7 @@ export const MonthlyPassScreen = () => {
                 style: { borderLeft: '4px solid #faad14' }
               });
             }
-          } catch (e) {
+          } catch {
             // ignore
           }
         }
@@ -147,7 +150,10 @@ export const MonthlyPassScreen = () => {
     }
   }, [stompClient, connected]);
 
-  // API QUERY: LẤY DANH SÁCH KHÁCH HÀNG VÉ THÁNG
+  // ==========================================
+  // [DATA]: LẤY DANH SÁCH VÉ THÁNG (MONTHLY PASSES)
+  // - Gọi API GET `/operation/monthly-tickets` lấy danh sách toàn bộ vé tháng và trạng thái hiện tại.
+  // ==========================================
   const { data: monthlyPassesData, isLoading } = useQuery({
     queryKey: ['monthlyPasses'],
     queryFn: async () => {
@@ -156,9 +162,15 @@ export const MonthlyPassScreen = () => {
     }
   });
 
-  const passes: MonthlyPass[] = monthlyPassesData || [];
+  const passes: MonthlyPass[] = React.useMemo(() => monthlyPassesData || [], [monthlyPassesData]);
 
-  // KIẾN TRÚC LỌC DỮ LIỆU NHIỀU LỚP (Memoization)
+  // ==========================================
+  // [LOGIC]: LỌC DANH SÁCH VÉ THÁNG
+  // - Lọc theo Loại xe (Ô tô/Xe máy).
+  // - Lọc theo Trạng thái (Hoạt động, Sắp hết hạn, Đã hết hạn).
+  // - Lọc theo Từ khóa (Biển số, Tên, Email, SĐT).
+  // - Lọc theo Vị trí (Trong bãi, Ngoài bãi).
+  // ==========================================
   const filteredPasses = React.useMemo(() => {
     return passes.filter(p => {
       let matchType = true;
@@ -190,10 +202,8 @@ export const MonthlyPassScreen = () => {
     });
   }, [passes, filterType, filterStatus, filterParking, searchKeyword]);
 
-  // TÍNH TOÁN KPI (On-the-fly)
   const activeCount = passes.filter(p => p.status === 'ACTIVE').length;
   const inactiveCount = passes.filter(p => p.status === 'EXPIRED').length;
-  
   const handleOpenDrawer = (record: MonthlyPass) => {
     setSelectedRecord(record);
     setIsDrawerOpen(true);
@@ -264,7 +274,9 @@ export const MonthlyPassScreen = () => {
         <Text type="secondary">System CRM Manage subscriptions, maintain cash flow and control long-term capacity</Text>
       </div>
 
-      {/* KPI CARDS */}
+      {/* ========================================== */}
+      {/* [RENDER]: HIỂN THỊ KPI (SỐ LƯỢNG VÉ THÁNG) */}
+      {/* ========================================== */}
       <Row gutter={16} className="mb-6">
         <Col span={12}>
           <Card className="shadow-sm border-l-4 border-l-green-500">
@@ -278,7 +290,9 @@ export const MonthlyPassScreen = () => {
         </Col>
       </Row>
 
-      {/* FILTER BAR */}
+      {/* ========================================== */}
+      {/* [RENDER]: BỘ LỌC TÌM KIẾM */}
+      {/* ========================================== */}
       <Card className="shadow-sm mb-6">
         <div className="flex gap-4">
           <Select value={filterType} onChange={setFilterType} className="w-40" options={[
