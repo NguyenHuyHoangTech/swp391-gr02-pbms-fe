@@ -1,3 +1,4 @@
+// Author: Võ Trung Hiếu
 import React, { useState, useMemo } from 'react';
 import { Card, DatePicker, Button, Typography, Table, Space, Row, Col, Statistic, Tabs } from 'antd';
 import { SearchOutlined, DownloadOutlined, DollarOutlined, TransactionOutlined, AreaChartOutlined, DashboardOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
@@ -37,6 +38,7 @@ const RevenueDashboardScreen: React.FC = () => {
   
   const [shiftPage, setShiftPage] = useState(1);
   const [shiftSize, setShiftSize] = useState(10);
+  const [shiftGateType, setShiftGateType] = useState<string>('');
 
   /**
    * [1] Fetch Master Dataset for Charts & KPIs
@@ -67,9 +69,13 @@ const RevenueDashboardScreen: React.FC = () => {
    * Lists expected vs actual revenue collected by staff per shift.
    */
   const { data: shiftHistoryData, isLoading: isShiftLoading } = useQuery({
-    queryKey: ['shift-revenue-history', appliedDateRange, shiftPage, shiftSize],
+    queryKey: ['shift-revenue-history', appliedDateRange, shiftPage, shiftSize, shiftGateType],
     queryFn: async () => {
-      const res = await axiosClient.get(`/identity/work-sessions/history?startDate=${appliedDateRange[0]}&endDate=${appliedDateRange[1]}&page=${shiftPage - 1}&size=${shiftSize}`);
+      let url = `/identity/work-sessions/history?startDate=${appliedDateRange[0]}&endDate=${appliedDateRange[1]}&page=${shiftPage - 1}&size=${shiftSize}`;
+      if (shiftGateType) {
+        url += `&gateType=${shiftGateType}`;
+      }
+      const res = await axiosClient.get(url);
       return res.data.data;
     }
   });
@@ -353,6 +359,24 @@ const RevenueDashboardScreen: React.FC = () => {
       <Card 
         className="shadow-sm border-slate-200 rounded-xl mb-6"
         title={<span><SafetyCertificateOutlined className="mr-2 text-blue-600" /> Shift Reconciliation</span>}
+        extra={
+          <Space>
+            <Text type="secondary">Gate Status:</Text>
+            <select 
+              className="border border-gray-300 rounded px-2 py-1 outline-none text-sm"
+              value={shiftGateType}
+              onChange={(e) => {
+                setShiftGateType(e.target.value);
+                setShiftPage(1);
+              }}
+            >
+              <option value="">All</option>
+              <option value="ENTRY">ENTRY</option>
+              <option value="EXIT">EXIT</option>
+              <option value="IN_OUT">IN_OUT</option>
+            </select>
+          </Space>
+        }
       >
         <Table
             dataSource={shiftHistoryData?.content || []}
@@ -376,6 +400,16 @@ const RevenueDashboardScreen: React.FC = () => {
             <Table.Column title="Staff" dataIndex="staffName" width={180} render={(val) => <strong className="text-blue-700">{val}</strong>} />
             <Table.Column title="Gate" dataIndex="gateName" width={150} />
             <Table.Column 
+              title="Gate Status" 
+              dataIndex="gateType" 
+              width={120} 
+              render={(val) => {
+                if (val === 'ENTRY') return <span className="text-blue-600 font-medium">ENTRY</span>;
+                if (val === 'EXIT') return <span className="text-green-600 font-medium">EXIT</span>;
+                return <span className="text-gray-600 font-medium">{val}</span>;
+              }} 
+            />
+            <Table.Column 
               title="Working time" 
               key="time" 
               width={250}
@@ -391,59 +425,21 @@ const RevenueDashboardScreen: React.FC = () => {
               dataIndex="expectedRevenue" 
               width={130}
               align="right"
-              render={(val, record: any) => record.gateType === 'PATROL' ? '-' : val != null ? val.toLocaleString() : '-'} 
+              render={(val) => val != null ? val.toLocaleString() : '-'} 
             />
             <Table.Column 
               title="System Cash" 
               dataIndex="expectedCashRevenue" 
               width={130}
               align="right"
-              render={(val, record: any) => record.gateType === 'PATROL' ? '-' : val != null ? <span className="text-orange-600">{val.toLocaleString()}</span> : '-'} 
+              render={(val) => val != null ? <span className="text-orange-600">{val.toLocaleString()}</span> : '-'} 
             />
             <Table.Column 
               title="System Other" 
               dataIndex="expectedOtherRevenue" 
               width={130}
               align="right"
-              render={(val, record: any) => record.gateType === 'PATROL' ? '-' : val != null ? <span className="text-purple-600">{val.toLocaleString()}</span> : '-'} 
-            />
-            <Table.Column 
-              title="Net revenue (VND)" 
-              dataIndex="actualRevenue" 
-              width={150}
-              align="right"
-              render={(val, record: any) => record.gateType === 'PATROL' ? '-' : val != null ? <strong className="text-gray-800">{val.toLocaleString()}</strong> : '-'} 
-            />
-            <Table.Column 
-              title="Difference" 
-              dataIndex="revenueVariance" 
-              width={150}
-              align="right"
-              render={(val, record: any) => {
-                if (record.gateType === 'PATROL') return '-';
-                if (val == null) return '-';
-                if (val === 0) return <span className="text-gray-400">0</span>;
-                return <strong className={val > 0 ? 'text-blue-600' : 'text-red-600'}>{val > 0 ? '+' : ''}{val.toLocaleString()}</strong>;
-              }} 
-            />
-            <Table.Column 
-              title="Status" 
-              dataIndex="discrepancyStatus" 
-              width={120}
-              align="center"
-              render={(val, record: any) => {
-                if (record.gateType === 'PATROL') return <span className="text-gray-400 italic">Not Applicable</span>;
-                if (val === 'MATCH') return <span className="text-green-600 border border-green-600 px-2 py-1 rounded text-xs">Match</span>;
-                if (val === 'SHORT') return <span className="text-red-600 border border-red-600 px-2 py-1 rounded text-xs">Short</span>;
-                if (val === 'OVER') return <span className="text-blue-600 border border-blue-600 px-2 py-1 rounded text-xs">Over</span>;
-                return <span className="text-gray-600 border border-gray-600 px-2 py-1 rounded text-xs">{val || 'N/A'}</span>;
-              }} 
-            />
-            <Table.Column 
-              title="Reason" 
-              dataIndex="varianceReason" 
-              width={250}
-              render={(val) => val ? <Text type="secondary" italic>{val}</Text> : '-'} 
+              render={(val) => val != null ? <span className="text-purple-600">{val.toLocaleString()}</span> : '-'} 
             />
           </Table>
       </Card>
@@ -479,18 +475,21 @@ const RevenueDashboardScreen: React.FC = () => {
           bordered
           size="middle"
         >
-          <Table.Column title="Date" dataIndex="date" render={(_, r: any) => <strong>{dayjs(r.date).format('DD/MM/YYYY')}</strong>} />
+          <Table.Column title="Exit Time" dataIndex="checkoutTime" render={(val) => <strong>{dayjs(val).format('DD/MM/YYYY HH:mm')}</strong>} />
+          <Table.Column title="License Plate" dataIndex="plate" render={(val) => <span className="font-semibold text-slate-800">{val || 'N/A'}</span>} />
           <Table.Column title="Vehicle Type" dataIndex="vehicleType" />
-          <Table.Column title="Gate" dataIndex="gateName" render={(val) => <span className="text-gray-600 font-medium">{val || 'N/A'}</span>} />
-          <Table.Column title="Revenue Source" dataIndex="revenueSource" />
-          <Table.Column title="Method" dataIndex="paymentMethod" />
+          <Table.Column title="Exit Gate" dataIndex="gateName" render={(val) => <span className="text-gray-600 font-medium">{val || 'N/A'}</span>} />
+          <Table.Column title="Reservation Fee" dataIndex="reservationFee" align="right" render={(val) => <span>{val?.toLocaleString()} ₫</span>} />
+          <Table.Column title="Base Fee" dataIndex="baseFee" align="right" render={(val) => <span>{val?.toLocaleString()} ₫</span>} />
+          <Table.Column title="Overtime Fee" dataIndex="overtimeFee" align="right" render={(val) => <span>{val?.toLocaleString()} ₫</span>} />
+          <Table.Column title="Penalty Fee" dataIndex="penaltyFee" align="right" render={(val) => <span>{val?.toLocaleString()} ₫</span>} />
           <Table.Column 
             title="Total Revenue" 
-            dataIndex="totalRevenue" 
+            dataIndex="totalFee" 
             align="right"
             render={(val) => <span className="font-bold text-blue-600">{val?.toLocaleString()} ₫</span>}
           />
-          <Table.Column title="Total Transactions" dataIndex="totalTransactions" align="center" />
+          <Table.Column title="Payment Method" dataIndex="paymentMethod" align="center" />
         </Table>
           </Card>
     </div>

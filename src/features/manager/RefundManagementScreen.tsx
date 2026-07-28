@@ -1,3 +1,4 @@
+// Author: Võ Trung Hiếu
 import React, { useState } from 'react';
 import { 
   Card, Typography, Table, Tag, Button, message, Space, Row, Col, 
@@ -35,6 +36,7 @@ interface RefundRecord {
   accountName: string;
   rejectReason?: string;
   referenceType?: string;
+  referenceId?: string;
   proofUrl?: string;
 }
 
@@ -81,8 +83,8 @@ export const RefundManagementScreen = () => {
   const [rejectReason, setRejectReason] = useState('');
 
   const pendingCount = refundsData.filter((d: RefundRecord) => d.status === 'PENDING').length;
-  const totalPendingAmount = refundsData.filter((d: RefundRecord) => d.status === 'PENDING').reduce((acc: number, curr: RefundRecord) => acc + curr.refundAmount, 0);
-  const totalRefundedToday = refundsData.filter((d: RefundRecord) => d.status === 'REFUNDED').reduce((acc: number, curr: RefundRecord) => acc + curr.refundAmount, 0);
+  const totalPendingAmount = Math.round(refundsData.filter((d: RefundRecord) => d.status === 'PENDING').reduce((acc: number, curr: RefundRecord) => acc + curr.refundAmount, 0));
+  const totalRefundedToday = Math.round(refundsData.filter((d: RefundRecord) => d.status === 'REFUNDED').reduce((acc: number, curr: RefundRecord) => acc + curr.refundAmount, 0));
 
   const handleOpenDrawer = (record: RefundRecord) => {
     setSelectedRecord(record);
@@ -99,7 +101,7 @@ export const RefundManagementScreen = () => {
 
   const handleApprove = () => {
     if (!selectedRecord) return;
-    message.loading({ content: 'Processing the ordereee', key: 'process' });
+    message.loading({ content: 'Processing the order...', key: 'process' });
     approveMutation.mutate(selectedRecord.id, {
       onSuccess: () => {
         setIsDrawerOpen(false);
@@ -111,10 +113,10 @@ export const RefundManagementScreen = () => {
   const handleReject = () => {
     if (!selectedRecord) return;
     if (!rejectReason.trim()) {
-      message.error('Please enter reason for Reject!');
+      message.error('Please enter a reason for rejection!');
       return;
     }
-    message.loading({ content: 'Rejecting requesteee', key: 'process' });
+    message.loading({ content: 'Rejecting request...', key: 'process' });
     rejectMutation.mutate({ id: selectedRecord.id, reason: rejectReason }, {
       onSuccess: () => {
         setIsDrawerOpen(false);
@@ -137,14 +139,14 @@ export const RefundManagementScreen = () => {
         });
         setProofUploaded(true);
         onSuccess?.(res.data);
-        message.success('Download photo proof of Success!');
+        message.success('Uploaded proof successfully!');
         queryClient.invalidateQueries({ queryKey: ['refunds'] });
         
         // Update local state to show image immediately
         setSelectedRecord(prev => prev ? {...prev, proofUrl: res.data.data} : null);
       } catch (err) {
         onError?.(err as any);
-        message.error('Download image Failed!');
+        message.error('Failed to upload proof!');
       }
     },
     onRemove: () => {
@@ -154,7 +156,7 @@ export const RefundManagementScreen = () => {
 
   const columns = [
     {
-      title: 'Ma oeu Cau',
+      title: 'Request ID',
       dataIndex: 'id',
       key: 'id',
       render: (text: string, record: RefundRecord) => (
@@ -185,7 +187,7 @@ export const RefundManagementScreen = () => {
       title: 'Amount to be refunded',
       dataIndex: 'refundAmount',
       key: 'refundAmount',
-      render: (amount: number) => <Text strong className="text-orange-600">{amount.toLocaleString()} VND</Text>
+      render: (amount: number) => <Text strong className="text-orange-600">{Math.round(amount).toLocaleString()} VND</Text>
     },
     {
       title: 'Status',
@@ -249,6 +251,10 @@ export const RefundManagementScreen = () => {
     }
     
     return true;
+  }).sort((a: any, b: any) => {
+    const timeA = a.cancelTime ? new Date(a.cancelTime.replace(' ', 'T')).getTime() : 0;
+    const timeB = b.cancelTime ? new Date(b.cancelTime.replace(' ', 'T')).getTime() : 0;
+    return timeB - timeA;
   });
 
   return (
@@ -268,7 +274,7 @@ export const RefundManagementScreen = () => {
         <Col span={8}>
           <Card className={`shadow-sm ${pendingCount > 0 ? 'border-orange-300 bg-orange-50/30' : ''}`}>
             <Statistic 
-              title={<span className={pendingCount > 0 ? 'text-orange-600 font-semibold animate-pulse' : ''}>pending request</span>}
+              title={<span className={pendingCount > 0 ? 'text-orange-600 font-semibold animate-pulse' : ''}>pending requests</span>}
               value={pendingCount} 
               suffix="Tickets" 
               valueStyle={{ color: pendingCount > 0 ? '#d97706' : '#000', fontWeight: 'bold' }} 
@@ -350,23 +356,24 @@ export const RefundManagementScreen = () => {
           selectedRecord?.status === 'PENDING' && (
             <div className="flex flex-col gap-3 w-full">
               <div className="flex justify-between items-center w-full">
-                <Button danger onClick={() => setIsRejecting(!isRejecting)}>
-                  
-                                              Reject Refund
-                                            </Button>
+                {selectedRecord?.referenceType === 'RESERVATION' ? (
+                  <Button danger onClick={() => setIsRejecting(!isRejecting)}>
+                    Reject Refund
+                  </Button>
+                ) : (
+                  <div></div>
+                )}
                 <Button 
                   type="primary" 
                   className="bg-green-600 hover:bg-green-500" 
                   disabled={!proofUploaded}
                   onClick={handleApprove}
                 >
-                  
-                                              Fund Transfer & Application Closed
-                                            </Button>
+                  Fund Transferred & Request Closed</Button>
               </div>
               {isRejecting && (
                 <div className="bg-red-50 p-4 rounded-lg border border-red-200 mt-2">
-                  <Text strong className="text-red-600 block mb-2">Reason Reject:</Text>
+                  <Text strong className="text-red-600 block mb-2">Reason for Rejection:</Text>
                   <TextArea 
                     rows={3} 
                     placeholder="Example: Wrong account information, contacted customer" 
@@ -375,7 +382,7 @@ export const RefundManagementScreen = () => {
                     className="mb-3"
                   />
                   <div className="flex justify-end">
-                    <Button danger type="primary" onClick={handleReject}>Confirm Reject</Button>
+                    <Button danger type="primary" onClick={handleReject}>Confirm Rejection</Button>
                   </div>
                 </div>
               )}
@@ -388,11 +395,11 @@ export const RefundManagementScreen = () => {
             
             {/* Status Banner */}
             {selectedRecord.status === 'REFUNDED' && (
-              <Alert message="This application has been successfully refunded" type="success" showIcon />
+              <Alert message="This request has been successfully refunded" type="success" showIcon />
             )}
             {selectedRecord.status === 'REJECTED' && selectedRecord.referenceType !== 'FAILED_TRANSACTION' && (
               <Alert 
-                message="This application has been Rejected" 
+                message="This request has been Rejected" 
                 description={<Text className="text-red-700">Reason: {selectedRecord.rejectReason || 'No reason'}</Text>}
                 type="error" 
                 showIcon 
@@ -406,7 +413,12 @@ export const RefundManagementScreen = () => {
                 description={
                   <div>
                     <Text className="text-red-700 block mb-1">The customer successfully paid, but the system encountered an error while processing the booking. Please refund the full amount.</Text>
-                    <Text className="text-xs text-gray-500 font-mono bg-red-50 p-1 rounded">{selectedRecord.rejectReason}</Text>
+                    <div className="flex items-center gap-2 mt-2">
+                        <Text strong>Payment Gateway Order Code:</Text>
+                        <Tag color="cyan" className="font-mono text-base px-2 py-1">{selectedRecord.referenceId}</Tag>
+                        <Button type="text" size="small" icon={<CopyOutlined />} onClick={() => handleCopy(selectedRecord.referenceId || '', 'Order Code')} />
+                    </div>
+                    <Text className="text-xs text-gray-500 font-mono bg-red-50 p-1 rounded mt-2 block">{selectedRecord.rejectReason}</Text>
                   </div>
                 }
                 type="error" 
@@ -419,7 +431,7 @@ export const RefundManagementScreen = () => {
 
             {/* Part A: Cancellation Audit */}
             <div>
-              <Title level={5} className="text-indigo-800 border-b pb-2">ae Policy Analysis Cancel</Title>
+              <Title level={5} className="text-indigo-800 border-b pb-2">A. Policy Analysis for Cancellation</Title>
               <Timeline className="mt-4"
                 items={[
                   { color: 'green', children: `Booking time: ${selectedRecord.bookingTime}` },
@@ -428,25 +440,25 @@ export const RefundManagementScreen = () => {
                 ]}
               />
               <div className="bg-slate-100 p-4 rounded-lg flex flex-col gap-2">
-                <div className="flex justify-between">
-                  <Text>Amount paid by customer:</Text>
-                  <Text strong>{selectedRecord.paidAmount.toLocaleString()}  D</Text>
+                <div className="flex justify-between items-center mb-2">
+                  <Text type="secondary">Customer Paid:</Text>
+                  <Text strong>{Math.round(selectedRecord.paidAmount).toLocaleString()} VND</Text>
                 </div>
-                <div className="flex justify-between text-red-600">
-                  <Text type="danger">Late cancellation penalty:</Text>
-                  <Text strong>- {selectedRecord.penaltyFee.toLocaleString()}  D</Text>
+                <div className="flex justify-between items-center mb-2">
+                  <Text type="secondary">Cancellation Fee (Penalty):</Text>
+                  <Text strong>- {Math.round(selectedRecord.penaltyFee).toLocaleString()} VND</Text>
                 </div>
                 <Divider className="my-2" />
-                <div className="flex justify-between items-center">
-                  <Text strong className="text-base">Actual receipt (Need to be transferred):</Text>
-                  <Text strong className="text-2xl text-red-600">{selectedRecord.refundAmount.toLocaleString()}  D</Text>
+                <div className="flex justify-between items-center mt-2 pt-2 border-t border-gray-200">
+                  <Text strong className="text-lg">Total Refund:</Text>
+                  <Text strong className="text-2xl text-red-600">{Math.round(selectedRecord.refundAmount).toLocaleString()} VND</Text>
                 </div>
               </div>
             </div>
 
             {/* Part B: Customer Bank Info */}
             <div>
-              <Title level={5} className="text-indigo-800 border-b pb-2">Be Information Receive money</Title>
+              <Title level={5} className="text-indigo-800 border-b pb-2">B. Bank Information for Refund</Title>
               
               {selectedRecord.customerName !== selectedRecord.registeredName && (
                 <Alert 
@@ -489,7 +501,7 @@ export const RefundManagementScreen = () => {
             {/* Part C: Proof Upload */}
             {(selectedRecord.status === 'PENDING' || selectedRecord.proofUrl) && (
               <div>
-                <Title level={5} className="text-indigo-800 border-b pb-2 mb-4">Ce Evidence of Transfer</Title>
+                <Title level={5} className="text-indigo-800 border-b pb-2 mb-4">C. Evidence of Transfer</Title>
                 
                 {selectedRecord.proofUrl && (
                   <div className="mb-4 text-center">
@@ -506,11 +518,10 @@ export const RefundManagementScreen = () => {
                     <p className="ant-upload-drag-icon">
                       <InboxOutlined className="text-blue-500" />
                     </p>
-                    <p className="ant-upload-text font-semibold">Click or Drag and drop the Delegation photo here</p>
+                    <p className="ant-upload-text font-semibold">Click or drag and drop the receipt photo here</p>
                     <p className="ant-upload-hint px-4 text-xs">
-                      
-                                                                To ensure audit safety, Accountants are required to upload a photo of the Success transfer transaction before closing the order.
-                                                              </p>
+                      To ensure audit safety, you are required to upload a photo of the successful transfer receipt before closing the request.
+                    </p>
                   </Dragger>
                 )}
               </div>

@@ -1,3 +1,4 @@
+// Author: Võ Trung Hiếu
 import { simulatedDayjs } from '../../core/utils/timeProvider';
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -26,7 +27,7 @@ const { Title, Text } = Typography;
 const { Panel } = Collapse;
 
 /*
-Viết Thử Tiếng Việt
+Test text
 */
 
 interface Slice {
@@ -81,7 +82,7 @@ export const PricingConfigScreen = () => {
     monthlyRate: 0,
     shifts: [{
       id: `shift_${Date.now()}`,
-      name: 'Default Ca',
+      name: 'Default Shift',
       startTime: '00:00',
       endTime: '23:59',
       color: 'bg-blue-100 border-blue-300 text-blue-800',
@@ -224,7 +225,7 @@ export const PricingConfigScreen = () => {
       });
     },
     onError: (error: any) => {
-      message.error('Lỗi khi tính thử phí: ' + (error.response?.data?.message || error.message));
+      message.error('Fee calculation error: ' + (error.response?.data?.message || error.message));
     }
   });
 
@@ -290,7 +291,7 @@ export const PricingConfigScreen = () => {
   });
 
   const handleSave = () => {
-    if (confirmInput.toUpperCase() === 'XACNHAN') {
+    if (confirmInput.toUpperCase() === 'CONFIRM') {
       const payload = {
         id: (config as any).id,
         policyName: config.policyName || `Pricing table ${vehicleTypesData?.find((v: any) => v.id === activeTabId)?.typeName || 'Default'}`,
@@ -405,7 +406,7 @@ export const PricingConfigScreen = () => {
       newStartTime = `${startH.toString().padStart(2, '0')}:${startM.toString().padStart(2, '0')}`;
       newEndTime = `${endH.toString().padStart(2, '0')}:${endM.toString().padStart(2, '0')}`;
     } else {
-      message.error('Các ca đã kín 24h, không thể thêm ca mới!');
+      message.error('The 24h slots are full, cannot add a new shift!');
       return;
     }
 
@@ -548,8 +549,7 @@ export const PricingConfigScreen = () => {
                 <ClockCircleOutlined />  Overall Time Axis (24H)
               </h3>
               <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={handleAddShift}>
-
-                Add Ca
+                Add Shift
               </Button>
             </div>
 
@@ -825,10 +825,10 @@ export const PricingConfigScreen = () => {
 
             {/* Section 2: Shift */}
             {selectedShiftId && (
-              <Panel header={<span className="text-blue-500 text-sm"><ClockCircleOutlined className="mr-2" />  CONFIGURATION Ca</span>} key="2">
+              <Panel header={<span className="text-blue-500 text-sm"><ClockCircleOutlined className="mr-2" />  SHIFT CONFIGURATION</span>} key="2">
                 <div className="space-y-4 px-2 pb-2">
                   <div>
-                    <label className="text-xs text-gray-500 block mb-1 font-medium">Name Ca</label>
+                    <label className="text-xs text-gray-500 block mb-1 font-medium">Shift Name</label>
                     <Input value={selectedShift?.name} onChange={e => {
                       setConfig(prev => ({ ...prev, shifts: prev.shifts.map(s => s.id === selectedShiftId ? { ...s, name: e.target.value } : s) }));
                     }} />
@@ -853,8 +853,7 @@ export const PricingConfigScreen = () => {
                   </div>
                   <div className="flex justify-end pt-2 border-t border-gray-100">
                     <Button danger size="small" icon={<DeleteOutlined />} onClick={handleDeleteShift}>
-
-                      Delete This Song
+                      Delete This Shift
                     </Button>
                   </div>
                 </div>
@@ -967,11 +966,11 @@ export const PricingConfigScreen = () => {
           <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 mb-4">
             <p className="mb-2 text-xs text-gray-500 flex justify-between">
               <span>Confirmation code:</span>
-              <strong className="text-blue-600 bg-blue-50 px-1 rounded font-mono">XACNHAN</strong>
+              <strong className="text-blue-600 bg-blue-50 px-1 rounded font-mono">CONFIRM</strong>
             </p>
             <Input
               autoFocus
-              placeholder="Type XaCNHaNeee"
+              placeholder="Type CONFIRM"
               value={confirmInput}
               onChange={e => setConfirmInput(e.target.value)}
               className="text-center font-mono uppercase"
@@ -980,7 +979,7 @@ export const PricingConfigScreen = () => {
           </div>
           <div className="flex gap-2">
             <Button onClick={() => setIsConfirmModalOpen(false)} className="flex-1">Cancel Cancel</Button>
-            <Button type="primary" danger onClick={handleSave} disabled={confirmInput.toUpperCase() !== 'XACNHAN'} className="flex-1 font-bold">
+            <Button type="primary" danger onClick={handleSave} disabled={confirmInput.toUpperCase() !== 'CONFIRM'} className="flex-1 font-bold">
 
               Confirm SAVE
             </Button>
