@@ -1,25 +1,19 @@
 /**
  * @Author: Thái Tân Phú
- * @Date: 2026-07-17
- * @Description: Màn hình quản lý Yêu cầu Hoàn tiền (Refund Management) dành cho Manager.
- * Xử lý nghiệp vụ hoàn tiền cho khách hàng khi họ hủy đặt chỗ hoặc gặp lỗi hệ thống.
- * Bao gồm các tính năng: Bảng danh sách yêu cầu, Upload ảnh UNC (Ủy nhiệm chi),
- * Duyệt (Approve) hoặc Từ chối (Reject) yêu cầu.
+ * @Date: 28/07/2026
+ * @Description: Màn hình Quản lý Yêu cầu Hoàn tiền (Refund Management). Hỗ trợ nhân viên đối soát, tải lên hình ảnh biên lai chuyển khoản và duyệt/từ chối yêu cầu.
  * @Dependencies: 
- * - axiosClient: Call API
- * - API: GET /finance/refunds (Lấy danh sách yêu cầu hoàn tiền)
- * - API: PUT /finance/refunds/{id}/approve (Duyệt hoàn tiền)
- * - API: PUT /finance/refunds/{id}/reject (Từ chối hoàn tiền)
- * - API: POST /finance/refunds/{id}/proof (Upload ảnh UNC)
+ * - React, antd
+ * - axiosClient, react-query, dayjs
  */
 import React, { useState } from 'react';
-import {
-  Card, Typography, Table, Tag, Button, message, Space, Row, Col,
+import { 
+  Card, Typography, Table, Tag, Button, message, Row, Col, 
   Statistic, DatePicker, Select, Input, Drawer, Timeline, Alert, Divider, Upload
 } from 'antd';
-import {
-  DollarOutlined, CheckCircleOutlined, SyncOutlined, CopyOutlined,
-  WarningOutlined, InboxOutlined, MoreOutlined, CloseCircleOutlined, UploadOutlined, FilterOutlined
+import { 
+  DollarOutlined, CheckCircleOutlined, SyncOutlined, CopyOutlined, 
+  WarningOutlined, InboxOutlined, MoreOutlined, CloseCircleOutlined
 } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import dayjs from 'dayjs';
@@ -31,8 +25,6 @@ const { Search } = Input;
 const { Dragger } = Upload;
 const { TextArea } = Input;
 
-// KHUÔN MẪU DỮ LIỆU (INTERFACE)
-// Mô tả cấu trúc 1 Yêu cầu Hoàn tiền (RefundRecord) trả về từ Backend.
 interface RefundRecord {
   id: string;
   customerName: string;
@@ -51,6 +43,7 @@ interface RefundRecord {
   accountName: string;
   rejectReason?: string;
   referenceType?: string;
+  referenceId?: string;
   proofUrl?: string;
 }
 
@@ -61,9 +54,12 @@ import { getImageUrl } from '../../core/utils/imageHelper';
 export const RefundManagementScreen = () => {
   const queryClient = useQueryClient();
 
-  // API QUERY: LẤY DANH SÁCH YÊU CẦU HOÀN TIỀN
-  // Gọi GET /finance/refunds -> Lấy mảng dữ liệu đổ vào biến refundsData
-  const { data: refundsData = [], isLoading } = useQuery({
+  // ==========================================
+  // [DATA]: LẤY DANH SÁCH YÊU CẦU HOÀN TIỀN
+  // - Gọi API GET `/finance/refunds`.
+  // - Lấy danh sách toàn bộ yêu cầu hoàn tiền (PENDING, REFUNDED, REJECTED) do hệ thống tự động sinh ra khi khách hủy vé.
+  // ==========================================
+  const { data: refundsData = [] } = useQuery({
     queryKey: ['refunds'],
     queryFn: async () => {
       const res = await axiosClient.get('/finance/refunds');
@@ -71,18 +67,28 @@ export const RefundManagementScreen = () => {
     }
   });
 
-  // API MUTATION: XÁC NHẬN ĐÃ CHUYỂN KHOẢN (APPROVE)
+  // ==========================================
+  // [API]: XÁC NHẬN ĐÃ HOÀN TIỀN (APPROVE)
+  // - Bước 1: Gọi API PUT `/finance/refunds/{id}/approve`.
+  // - Bước 2: Tách bỏ tiền tố 'REF-' ra khỏi ID trước khi gọi (để lấy numericId).
+  // - Bước 3: Sau khi thành công, gọi `invalidateQueries` để tải lại danh sách giao diện.
+  // ==========================================
   const approveMutation = useMutation({
     mutationFn: async (id: string) => {
-      const numericId = id.replace('REF-', ''); // Cắt bỏ prefix "REF-" để lấy ID số nguyên
+      const numericId = id.replace('REF-', '');
       await axiosClient.put(`/finance/refunds/${numericId}/approve`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['refunds'] }); // Reload lại bảng
+      queryClient.invalidateQueries({ queryKey: ['refunds'] });
     }
   });
 
-  // API MUTATION: TỪ CHỐI HOÀN TIỀN (REJECT)
+  // ==========================================
+  // [API]: TỪ CHỐI HOÀN TIỀN (REJECT)
+  // - Bước 1: Gọi API PUT `/finance/refunds/{id}/reject`.
+  // - Bước 2: Truyền kèm lý do từ chối (`rejectReason`) vào Body.
+  // - Bước 3: Cập nhật lại giao diện khi API báo thành công.
+  // ==========================================
   const rejectMutation = useMutation({
     mutationFn: async ({ id, reason }: { id: string, reason: string }) => {
       const numericId = id.replace('REF-', '');
@@ -92,23 +98,21 @@ export const RefundManagementScreen = () => {
       queryClient.invalidateQueries({ queryKey: ['refunds'] });
     }
   });
+  const [selectedRecord, setSelectedRecord] = useState<RefundRecord | null>(null);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  
+  // ==========================================
+  // [STATE]: TRẠNG THÁI XỬ LÝ HOÀN TIỀN VÀ THỐNG KÊ
+  // - Lưu trữ cờ báo hiệu đã upload biên lai chưa (`proofUploaded`).
+  // - Tính tổng tiền đang chờ duyệt (`totalPendingAmount`) và tổng tiền đã hoàn trong ngày (`totalRefundedToday`).
+  // ==========================================
+  const [proofUploaded, setProofUploaded] = useState(false);
+  const [isRejecting, setIsRejecting] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
 
-  // STATE: ĐIỀU KHIỂN GIAO DIỆN (UI)
-  const [selectedRecord, setSelectedRecord] = useState<RefundRecord | null>(null); // Lưu data yêu cầu đang xem chi tiết
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false); // Bật/tắt Drawer chi tiết
-
-  // STATE: QUẢN LÝ TRẠNG THÁI XỬ LÝ TRONG DRAWER
-  const [proofUploaded, setProofUploaded] = useState(false); // Bắt buộc phải upload UNC thì mới cho bấm Approve
-  const [isRejecting, setIsRejecting] = useState(false); // Bật/tắt ô nhập lý do từ chối
-  const [rejectReason, setRejectReason] = useState(''); // Lưu lý do từ chối
-
-  // TÍNH TOÁN KPI (On-the-fly) TRÊN CÙNG MÀN HÌNH
-  // 1. Đếm số lượng đơn đang chờ xử lý (PENDING)
   const pendingCount = refundsData.filter((d: RefundRecord) => d.status === 'PENDING').length;
-  // 2. Tính tổng số tiền cần hoàn lại (PENDING)
-  const totalPendingAmount = refundsData.filter((d: RefundRecord) => d.status === 'PENDING').reduce((acc: number, curr: RefundRecord) => acc + curr.refundAmount, 0);
-  // 3. Tính tổng tiền đã hoàn trong ngày
-  const totalRefundedToday = refundsData.filter((d: RefundRecord) => d.status === 'REFUNDED').reduce((acc: number, curr: RefundRecord) => acc + curr.refundAmount, 0);
+  const totalPendingAmount = Math.round(refundsData.filter((d: RefundRecord) => d.status === 'PENDING').reduce((acc: number, curr: RefundRecord) => acc + curr.refundAmount, 0));
+  const totalRefundedToday = Math.round(refundsData.filter((d: RefundRecord) => d.status === 'REFUNDED').reduce((acc: number, curr: RefundRecord) => acc + curr.refundAmount, 0));
 
   const handleOpenDrawer = (record: RefundRecord) => {
     setSelectedRecord(record);
@@ -149,8 +153,12 @@ export const RefundManagementScreen = () => {
     });
   };
 
-  // CẤU HÌNH UPLOAD ẢNH ỦY NHIỆM CHI (UNC)
-  // Gửi file ảnh dạng FormData lên API POST /finance/refunds/{id}/proof
+  // ==========================================
+  // [ACTION]: UPLOAD ẢNH BIÊN LAI (PROOF)
+  // - Bước 1: Khởi tạo `FormData` và gắn file ảnh vào.
+  // - Bước 2: Gọi API POST `/finance/refunds/{id}/proof` dạng `multipart/form-data`.
+  // - Bước 3: Cập nhật biến `proofUrl` vào state để ảnh hiển thị ngay lập tức không cần F5.
+  // ==========================================
   const uploadProps: UploadProps = {
     name: 'file',
     multiple: false,
@@ -167,9 +175,9 @@ export const RefundManagementScreen = () => {
         onSuccess?.(res.data);
         message.success('Download photo proof of Success!');
         queryClient.invalidateQueries({ queryKey: ['refunds'] });
-
-        // Update local state to show image immediately
-        setSelectedRecord(prev => prev ? { ...prev, proofUrl: res.data.data } : null);
+        
+        // [EFFECT]: CẬP NHẬT TRẠNG THÁI LOCAL ĐỂ HIỂN THỊ ẢNH NGAY LẬP TỨC
+        setSelectedRecord(prev => prev ? {...prev, proofUrl: res.data.data} : null);
       } catch (err) {
         onError?.(err as any);
         message.error('Download image Failed!');
@@ -180,7 +188,6 @@ export const RefundManagementScreen = () => {
     }
   };
 
-  // CẤU TRÚC CỘT CỦA DATA TABLE
   const columns = [
     {
       title: 'Ma oeu Cau',
@@ -200,7 +207,7 @@ export const RefundManagementScreen = () => {
       render: (text: string, record: RefundRecord) => (
         <div>
           <Text strong>{text}</Text>
-          <br />
+          <br/>
           <Text type="secondary" className="text-xs">{record.customerEmail}</Text>
         </div>
       )
@@ -214,7 +221,7 @@ export const RefundManagementScreen = () => {
       title: 'Amount to be refunded',
       dataIndex: 'refundAmount',
       key: 'refundAmount',
-      render: (amount: number) => <Text strong className="text-orange-600">{amount.toLocaleString()} VND</Text>
+      render: (amount: number) => <Text strong className="text-orange-600">{Math.round(amount).toLocaleString()} VND</Text>
     },
     {
       title: 'Status',
@@ -234,31 +241,33 @@ export const RefundManagementScreen = () => {
       title: '',
       key: 'action',
       render: (_: any, record: RefundRecord) => (
-        <Button
-          type="text"
-          icon={<MoreOutlined />}
+        <Button 
+          type="text" 
+          icon={<MoreOutlined />} 
           onClick={() => handleOpenDrawer(record)}
         />
       )
     }
   ];
 
-  // STATE: BỘ LỌC TÌM KIẾM (FILTERS)
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [searchText, setSearchText] = useState<string>('');
-
-  // Date states
+  
+  // ==========================================
+  // [LOGIC]: BỘ LỌC DANH SÁCH (FILTERS)
+  // - Mặc định lọc 7 ngày gần nhất.
+  // - Hỗ trợ lọc theo 3 tiêu chí: Trạng thái (PENDING/REFUNDED/REJECTED), Khoảng ngày hủy vé, và Từ khóa (Mã yêu cầu hoặc Biển số xe).
+  // ==========================================
   const [dateRange, setDateRange] = useState<any>([
-    simulatedDayjs().subtract(7, 'day').startOf('day'),
+    simulatedDayjs().subtract(7, 'day').startOf('day'), 
     simulatedDayjs().endOf('day')
   ]);
 
-  // KIẾN TRÚC LỌC DỮ LIỆU
   const filteredData = refundsData.filter((record: RefundRecord) => {
-    // 1. Lọc theo trạng thái
+    // Lọc theo trạng thái
     if (filterStatus !== 'ALL' && record.status !== filterStatus) return false;
-
-    // 2. Lọc theo chữ (Mã đơn hoặc Biển số)
+    
+    // Lọc theo từ khóa tìm kiếm (Mã ID hoặc Biển số)
     if (searchText) {
       const lowerSearch = searchText.toLowerCase();
       const matchId = record.id?.toLowerCase().includes(lowerSearch);
@@ -266,20 +275,24 @@ export const RefundManagementScreen = () => {
       if (!matchId && !matchPlate) return false;
     }
 
-    // 3. Lọc theo Ngày hủy (cancelTime)
+    // Lọc theo khoảng ngày hủy (cancelTime)
     if (dateRange && dateRange[0] && dateRange[1]) {
-      // Backend format is "yyyy-MM-dd HH:mm", replace space with T to make it standard ISO for dayjs
+      // Format Backend trả về có khoảng trắng, cần chuyển sang chữ T để dayjs parse được chuẩn ISO
       const isoString = record.cancelTime ? record.cancelTime.replace(' ', 'T') : '';
       const recordDate = dayjs(isoString);
-
+      
       if (recordDate.isValid()) {
         const start = dateRange[0].startOf('day');
         const end = dateRange[1].endOf('day');
         if (recordDate.isBefore(start) || recordDate.isAfter(end)) return false;
       }
     }
-
-    return true; // Thoả mãn tất cả điều kiện thì giữ lại
+    
+    return true;
+  }).sort((a: any, b: any) => {
+    const timeA = a.cancelTime ? new Date(a.cancelTime.replace(' ', 'T')).getTime() : 0;
+    const timeB = b.cancelTime ? new Date(b.cancelTime.replace(' ', 'T')).getTime() : 0;
+    return timeB - timeA;
   });
 
   return (
@@ -298,31 +311,31 @@ export const RefundManagementScreen = () => {
       <Row gutter={16} className="mb-6">
         <Col span={8}>
           <Card className={`shadow-sm ${pendingCount > 0 ? 'border-orange-300 bg-orange-50/30' : ''}`}>
-            <Statistic
+            <Statistic 
               title={<span className={pendingCount > 0 ? 'text-orange-600 font-semibold animate-pulse' : ''}>pending request</span>}
-              value={pendingCount}
-              suffix="Tickets"
-              valueStyle={{ color: pendingCount > 0 ? '#d97706' : '#000', fontWeight: 'bold' }}
+              value={pendingCount} 
+              suffix="Tickets" 
+              valueStyle={{ color: pendingCount > 0 ? '#d97706' : '#000', fontWeight: 'bold' }} 
             />
           </Card>
         </Col>
         <Col span={8}>
           <Card className="shadow-sm">
-            <Statistic
-              title="Total amount to be refunded (Pending)"
-              value={totalPendingAmount}
-              suffix="VND"
-              valueStyle={{ color: '#cf1322', fontWeight: 'bold' }}
+            <Statistic 
+              title="Total amount to be refunded (Pending)" 
+              value={totalPendingAmount} 
+              suffix="VND" 
+              valueStyle={{ color: '#cf1322', fontWeight: 'bold' }} 
             />
           </Card>
         </Col>
         <Col span={8}>
           <Card className="shadow-sm">
-            <Statistic
-              title="Completed today"
-              value={totalRefundedToday}
-              suffix="VND"
-              valueStyle={{ color: '#3f8600', fontWeight: 'bold' }}
+            <Statistic 
+              title="Completed today" 
+              value={totalRefundedToday} 
+              suffix="VND" 
+              valueStyle={{ color: '#3f8600', fontWeight: 'bold' }} 
             />
           </Card>
         </Col>
@@ -330,28 +343,28 @@ export const RefundManagementScreen = () => {
 
       <Card className="shadow-sm mb-6">
         <div className="flex gap-4">
-          <Select
-            value={filterStatus}
+          <Select 
+            value={filterStatus} 
             onChange={setFilterStatus}
-            className="w-40"
+            className="w-40" 
             options={[
-              { label: 'Waiting', value: 'PENDING' },
-              { label: 'Completed', value: 'REFUNDED' },
-              { label: 'Reject', value: 'REJECTED' },
-              { label: 'All', value: 'ALL' }
-            ]}
+              {label: 'Waiting', value: 'PENDING'},
+              {label: 'Completed', value: 'REFUNDED'},
+              {label: 'Reject', value: 'REJECTED'},
+              {label: 'All', value: 'ALL'}
+            ]} 
           />
-          <RangePicker
-            format="DD/MM/YYYY"
-            placeholder={['From date', 'To date']}
-            className="w-96"
+          <RangePicker 
+            format="DD/MM/YYYY" 
+            placeholder={['From date', 'To date']} 
+            className="w-96" 
             value={dateRange}
             onChange={setDateRange}
           />
-          <Search
-            placeholder="Enter Request ID or License Plate"
-            className="w-80"
-            allowClear
+          <Search 
+            placeholder="Enter Request ID or License Plate" 
+            className="w-80" 
+            allowClear 
             onSearch={setSearchText}
             onChange={(e) => setSearchText(e.target.value)}
           />
@@ -361,9 +374,9 @@ export const RefundManagementScreen = () => {
 
       {/* Zone 2: DATA TABLE */}
       <Card className="shadow-sm rounded-xl border-slate-200" bodyStyle={{ padding: 0 }}>
-        <Table
-          columns={columns}
-          dataSource={filteredData}
+        <Table 
+          columns={columns} 
+          dataSource={filteredData} 
           rowKey="id"
           pagination={{ pageSize: 10 }}
           rowClassName={(record) => record.status === 'PENDING' ? 'bg-orange-50/50' : ''}
@@ -381,26 +394,29 @@ export const RefundManagementScreen = () => {
           selectedRecord?.status === 'PENDING' && (
             <div className="flex flex-col gap-3 w-full">
               <div className="flex justify-between items-center w-full">
-                <Button danger onClick={() => setIsRejecting(!isRejecting)}>
-
-                  Reject Refund
-                </Button>
-                <Button
-                  type="primary"
-                  className="bg-green-600 hover:bg-green-500"
+                {selectedRecord?.referenceType === 'RESERVATION' ? (
+                  <Button danger onClick={() => setIsRejecting(!isRejecting)}>
+                    Reject Refund
+                  </Button>
+                ) : (
+                  <div></div>
+                )}
+                <Button 
+                  type="primary" 
+                  className="bg-green-600 hover:bg-green-500" 
                   disabled={!proofUploaded}
                   onClick={handleApprove}
                 >
-
-                  Fund Transfer & Application Closed
-                </Button>
+                  
+                                              Fund Transfer & Application Closed
+                                            </Button>
               </div>
               {isRejecting && (
                 <div className="bg-red-50 p-4 rounded-lg border border-red-200 mt-2">
                   <Text strong className="text-red-600 block mb-2">Reason Reject:</Text>
-                  <TextArea
-                    rows={3}
-                    placeholder="Example: Wrong account information, contacted customer"
+                  <TextArea 
+                    rows={3} 
+                    placeholder="Example: Wrong account information, contacted customer" 
                     value={rejectReason}
                     onChange={(e) => setRejectReason(e.target.value)}
                     className="mb-3"
@@ -416,32 +432,37 @@ export const RefundManagementScreen = () => {
       >
         {selectedRecord && (
           <div className="flex flex-col gap-6">
-
+            
             {/* Status Banner */}
             {selectedRecord.status === 'REFUNDED' && (
               <Alert message="This application has been successfully refunded" type="success" showIcon />
             )}
             {selectedRecord.status === 'REJECTED' && selectedRecord.referenceType !== 'FAILED_TRANSACTION' && (
-              <Alert
-                message="This application has been Rejected"
+              <Alert 
+                message="This application has been Rejected" 
                 description={<Text className="text-red-700">Reason: {selectedRecord.rejectReason || 'No reason'}</Text>}
-                type="error"
-                showIcon
+                type="error" 
+                showIcon 
               />
             )}
 
             {/* System Error Banner for FAILED_TRANSACTION */}
             {selectedRecord.referenceType === 'FAILED_TRANSACTION' && (
-              <Alert
-                message="System Error after Payment"
+              <Alert 
+                message="System Error after Payment" 
                 description={
                   <div>
                     <Text className="text-red-700 block mb-1">The customer successfully paid, but the system encountered an error while processing the booking. Please refund the full amount.</Text>
-                    <Text className="text-xs text-gray-500 font-mono bg-red-50 p-1 rounded">{selectedRecord.rejectReason}</Text>
+                    <div className="flex items-center gap-2 mt-2">
+                        <Text strong>Payment Gateway Order Code:</Text>
+                        <Tag color="cyan" className="font-mono text-base px-2 py-1">{selectedRecord.referenceId}</Tag>
+                        <Button type="text" size="small" icon={<CopyOutlined />} onClick={() => handleCopy(selectedRecord.referenceId || '', 'Order Code')} />
+                    </div>
+                    <Text className="text-xs text-gray-500 font-mono bg-red-50 p-1 rounded mt-2 block">{selectedRecord.rejectReason}</Text>
                   </div>
                 }
-                type="error"
-                showIcon
+                type="error" 
+                showIcon 
                 className="mb-4"
               />
             )}
@@ -459,18 +480,18 @@ export const RefundManagementScreen = () => {
                 ]}
               />
               <div className="bg-slate-100 p-4 rounded-lg flex flex-col gap-2">
-                <div className="flex justify-between">
-                  <Text>Amount paid by customer:</Text>
-                  <Text strong>{selectedRecord.paidAmount.toLocaleString()}  D</Text>
+                <div className="flex justify-between items-center mb-2">
+                  <Text type="secondary">Customer Paid:</Text>
+                  <Text strong>{Math.round(selectedRecord.paidAmount).toLocaleString()} VND</Text>
                 </div>
-                <div className="flex justify-between text-red-600">
-                  <Text type="danger">Late cancellation penalty:</Text>
-                  <Text strong>- {selectedRecord.penaltyFee.toLocaleString()}  D</Text>
+                <div className="flex justify-between items-center mb-2">
+                  <Text type="secondary">Cancellation Fee (Penalty):</Text>
+                  <Text strong>- {Math.round(selectedRecord.penaltyFee).toLocaleString()} VND</Text>
                 </div>
                 <Divider className="my-2" />
-                <div className="flex justify-between items-center">
-                  <Text strong className="text-base">Actual receipt (Need to be transferred):</Text>
-                  <Text strong className="text-2xl text-red-600">{selectedRecord.refundAmount.toLocaleString()}  D</Text>
+                <div className="flex justify-between items-center mt-2 pt-2 border-t border-gray-200">
+                  <Text strong className="text-lg">Total Refund:</Text>
+                  <Text strong className="text-2xl text-red-600">{Math.round(selectedRecord.refundAmount).toLocaleString()} VND</Text>
                 </div>
               </div>
             </div>
@@ -478,13 +499,13 @@ export const RefundManagementScreen = () => {
             {/* Part B: Customer Bank Info */}
             <div>
               <Title level={5} className="text-indigo-800 border-b pb-2">Be Information Receive money</Title>
-
+              
               {selectedRecord.customerName !== selectedRecord.registeredName && (
-                <Alert
-                  message="Misinformation warning!"
+                <Alert 
+                  message="Misinformation warning!" 
                   description={`Cardholder name does not match App Account Name (${selectedRecord.registeredName}). Please check carefully before proceeding.`}
-                  type="warning"
-                  showIcon
+                  type="warning" 
+                  showIcon 
                   icon={<WarningOutlined />}
                   className="mb-4"
                 />
@@ -521,12 +542,12 @@ export const RefundManagementScreen = () => {
             {(selectedRecord.status === 'PENDING' || selectedRecord.proofUrl) && (
               <div>
                 <Title level={5} className="text-indigo-800 border-b pb-2 mb-4">Ce Evidence of Transfer</Title>
-
+                
                 {selectedRecord.proofUrl && (
                   <div className="mb-4 text-center">
-                    <img
+                    <img 
                       src={getImageUrl(selectedRecord.proofUrl)}
-                      alt="Proof"
+                      alt="Proof" 
                       className="max-w-full h-auto max-h-64 rounded shadow-md border"
                     />
                   </div>
@@ -539,9 +560,9 @@ export const RefundManagementScreen = () => {
                     </p>
                     <p className="ant-upload-text font-semibold">Click or Drag and drop the Delegation photo here</p>
                     <p className="ant-upload-hint px-4 text-xs">
-
-                      To ensure audit safety, Accountants are required to upload a photo of the Success transfer transaction before closing the order.
-                    </p>
+                      
+                                                                To ensure audit safety, Accountants are required to upload a photo of the Success transfer transaction before closing the order.
+                                                              </p>
                   </Dragger>
                 )}
               </div>
