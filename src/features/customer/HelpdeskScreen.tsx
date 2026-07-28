@@ -1,23 +1,20 @@
 /**
  * @Author: Thái Tân Phú
- * @Date: 2026-07-14
- * @Description: Customer dashboard for tracking and reporting incidents (lost card, fee dispute, etc.).
- * Includes two distinct layouts for Mobile and Desktop and an auto-polling mechanism for real-time updates.
+ * @Date: 28/07/2026
+ * @Description: Trung tâm hỗ trợ khách hàng (Helpdesk) - Giúp khách hàng xem danh sách các sự cố của mình và gửi yêu cầu hỗ trợ mới. Tự động polling mỗi 5s, hỗ trợ render linh hoạt giữa Mobile và Desktop.
  * @Dependencies: 
- * - IncidentSubmitForm (Local component)
- * - IncidentDetailPanel (Local component)
- * - VehicleAssignmentTab (Local component)
- * - axiosClient (Local util calling /incident/incidents API)
+ * - React, antd, react-query
+ * - IncidentSubmitForm, IncidentDetailPanel, axiosClient
  */
 import React, { useState, useEffect } from 'react';
-import { Typography, Button, Badge, List, Tag, Select, FloatButton, Modal, message } from 'antd';
+import { Typography, Button, Badge, List, Tag, Select, FloatButton } from 'antd';
 import { PlusOutlined, CreditCardOutlined, ArrowLeftOutlined } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axiosClient from '../../core/api/axiosClient';
 
 import { IncidentSubmitForm } from '../incident/components/IncidentSubmitForm';
 import { IncidentDetailPanel } from '../incident/components/IncidentDetailPanel';
-import { VehicleAssignmentTab } from '../incident/components/VehicleAssignmentTab';
+
 
 const { Title, Text } = Typography;
 
@@ -25,51 +22,91 @@ export const HelpdeskScreen = () => {
   const [selectedTicket, setSelectedTicket] = useState<any | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [queueFilter, setQueueFilter] = useState<string>('ALL');
+  const queryClient = useQueryClient();
 
-  // Handle mobile hardware back button using History API
+  // ==========================================
+  // [EFFECT]: XỬ LÝ NÚT BACK (POPSTATE) CỦA TRÌNH DUYỆT/ĐIỆN THOẠI
+  // - Lắng nghe sự kiện `popstate`.
+  // - Nếu người dùng bấm back, không thoát web app mà chỉ quay lại danh sách sự cố.
+  // - Reset `selectedTicket` và chuyển `selectedCategory` về 'ALL'.
+  // ==========================================
   useEffect(() => {
-    const handlePopState = (event: PopStateEvent) => {
+    const handlePopState = () => {
       // Whenever user presses physical back button, we go back to the main list
       setSelectedTicket(null);
-      if (window.location.hash !== '#create' && window.location.hash !== '#assign') {
-         setSelectedCategory(prev => (prev === 'CREATE_INCIDENT' || prev === 'ASSIGN_VEHICLE') ? 'ALL' : prev);
+      if (window.location.hash !== '#create') {
+         setSelectedCategory(prev => (prev === 'CREATE_INCIDENT') ? 'ALL' : prev);
       }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
+  // ==========================================
+  // [ACTION]: CÁC HÀM ĐIỀU HƯỚNG GIAO DIỆN (MOBILE)
+  // - Sử dụng HTML5 History API (`window.history.pushState`) để lưu trạng thái màn hình hiện tại (detail, form).
+  // - Cho phép nút Back vật lý trên điện thoại tương tác tự nhiên với SPA.
+  // ==========================================
+  
+  // 1. Mở xem chi tiết một sự cố
   const navigateToDetail = (ticket: any) => {
     window.history.pushState({ view: 'detail' }, '', '#detail');
     setSelectedTicket(ticket);
   };
 
+  // 2. Mở form tạo sự cố mới
   const navigateToForm = () => {
     window.history.pushState({ view: 'form' }, '', '#create');
     setSelectedCategory('CREATE_INCIDENT');
     setSelectedTicket(null);
   };
 
+  // 3. Quay lại màn hình trước
   const navigateBack = () => {
     window.history.back(); // This will trigger popstate
   };
 
-  // Fetch incidents for the current user
+  // ==========================================
+  // [DATA]: LẤY DANH SÁCH SỰ CỐ TỪ SERVER
+  // - Bước 1: Gọi API GET `/incident/incidents` để lấy mảng sự cố.
+  // - Bước 2: Tự động gọi lại sau mỗi 5 giây (Polling) thông qua thuộc tính `refetchInterval`.
+  // - Cung cấp dữ liệu theo thời gian thực cho danh sách.
+  // ==========================================
   const { data: ticketsData = [] } = useQuery({
     queryKey: ['incidents'],
     queryFn: async () => {
       try {
         const res = await axiosClient.get('/incident/incidents');
         return res.data?.data || [];
-      } catch (err) {
+      } catch {
         return [];
       }
     },
     refetchInterval: 5000
   });
 
+  // ==========================================
+  // [EFFECT]: TỰ ĐỘNG CẬP NHẬT CHI TIẾT SỰ CỐ
+  // - Bước 1: Theo dõi sự thay đổi của biến `ticketsData`.
+  // - Bước 2: Tìm sự cố trong danh sách có `id` trùng với `selectedTicket`.
+  // - Bước 3: So sánh chuỗi JSON của 2 object. Nếu có sự thay đổi (VD: Admin gửi tin nhắn mới), gọi `setSelectedTicket` để render lại giao diện.
+  // ==========================================
+  useEffect(() => {
+    if (selectedTicket) {
+      const updated = ticketsData.find((t: any) => t.id === selectedTicket.id);
+      if (updated && JSON.stringify(updated) !== JSON.stringify(selectedTicket)) {
+        setSelectedTicket(updated);
+      }
+    }
+  }, [ticketsData]);
+
+  // ==========================================
+  // [LOGIC]: LỌC DANH SÁCH SỰ CỐ (FILTER)
+  // - Lọc theo Loại sự cố: Nếu `selectedCategory` = ALL thì lấy hết, ngược lại lọc theo thuộc tính `type`.
+  // - Lọc theo Giai đoạn xử lý: Dựa trên biến `queueFilter` để lọc Phase 1 (Chờ xử lý), Phase 2 (Đang giải quyết), Phase 3 (Hoàn tất) hoặc Đã hủy.
+  // ==========================================
   const filteredTickets = ticketsData.filter((t: any) => {
-    const catMatch = selectedCategory === 'ALL' || selectedCategory === 'CREATE_INCIDENT' || selectedCategory === 'ASSIGN_VEHICLE' || t.type === selectedCategory;
+    const catMatch = selectedCategory === 'ALL' || selectedCategory === 'CREATE_INCIDENT' || t.type === selectedCategory;
     if (!catMatch) return false;
     
     if (queueFilter === 'PHASE_1') return t.phase === 1 && t.status !== 'CANCELLED' && t.status !== 'REJECTED';
@@ -79,18 +116,35 @@ export const HelpdeskScreen = () => {
     return true;
   });
 
-  const handleIncidentSuccess = (category: string, plate: string) => {
-    message.success('Đã gửi yêu cầu hỗ trợ thành công!');
-    setSelectedCategory('ALL');
-    setSelectedTicket(null);
-    if (window.location.hash === '#create' || window.location.hash === '#assign') {
+  // ==========================================
+  // [ACTION]: XỬ LÝ KHI TẠO SỰ CỐ THÀNH CÔNG
+  // - Bước 1: Gọi `invalidateQueries` để ép React Query gọi lại API lấy danh sách sự cố mới nhất.
+  // - Bước 2: Nếu có `newTicket` truyền vào -> Chọn mở ngay chi tiết sự cố đó.
+  // - Bước 3: Nếu không -> Trở về danh sách tất cả sự cố ('ALL').
+  // - Bước 4: Gọi `window.history.back()` để thoát màn hình Form.
+  // ==========================================
+  const handleIncidentSuccess = (category?: string, plate?: string, newTicket?: any) => {
+    queryClient.invalidateQueries({ queryKey: ['incidents'] });
+    if (newTicket) {
+      setSelectedTicket(newTicket);
+      setSelectedCategory('');
+    } else {
+      setSelectedCategory('ALL');
+      setSelectedTicket(null);
+    }
+    if (window.location.hash === '#create') {
       window.history.back();
     }
   };
 
+  // ==========================================
+  // [RENDER]: GIAO DIỆN MOBILE
+  // - Hiển thị theo nguyên tắc "Stack" (Xếp chồng). 
+  // - 1 thời điểm chỉ hiển thị 1 trong 3 trạng thái: Danh sách sự cố HOẶC Form tạo sự cố HOẶC Chi tiết sự cố.
+  // ==========================================
   const renderMobileView = () => {
     const isShowingDetail = selectedTicket !== null;
-    const isShowingForm = (selectedCategory === 'CREATE_INCIDENT' || selectedCategory === 'ASSIGN_VEHICLE') && selectedTicket === null;
+    const isShowingForm = selectedCategory === 'CREATE_INCIDENT' && selectedTicket === null;
     const isShowingList = !isShowingDetail && !isShowingForm;
 
     return (
@@ -99,16 +153,22 @@ export const HelpdeskScreen = () => {
           <div className="flex flex-col h-full overflow-hidden animate-fade-in w-full">
             {/* Header */}
             <div className="bg-white p-4 shadow-sm border-b border-gray-100 shrink-0 z-10 flex flex-col gap-3">
-              <div className="flex justify-between items-center">
+              <div className="flex justify-between items-center mb-1">
                 <Title level={4} className="m-0 text-gray-800">Hỗ trợ khách hàng</Title>
+                <Button 
+                  type="primary" 
+                  icon={<PlusOutlined />} 
+                  className="rounded-lg font-medium shadow-sm px-4"
+                  onClick={navigateToForm}
+                >
+                  Gửi yêu cầu
+                </Button>
               </div>
               
               {/* Horizontal Scroll Categories */}
               <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide snap-x">
                 {[
                   { id: 'ALL', label: 'Tất cả', count: ticketsData.length },
-                  { id: 'CREATE_INCIDENT', label: 'Tạo Sự Cố' },
-                  { id: 'ASSIGN_VEHICLE', label: 'Gán Xe' },
                   { id: 'ZONE_VIOLATION', label: 'Sai khu vực', count: ticketsData.filter((t: any) => t.type === 'ZONE_VIOLATION').length },
                   { id: 'OVERSTAY', label: 'Quá giờ', count: ticketsData.filter((t: any) => t.type === 'OVERSTAY').length },
                   { id: 'LOST_CARD', label: 'Mất thẻ', count: ticketsData.filter((t: any) => t.type === 'LOST_CARD').length },
@@ -197,19 +257,6 @@ export const HelpdeskScreen = () => {
           </div>
         )}
 
-        {isShowingForm && selectedCategory === 'ASSIGN_VEHICLE' && (
-          <div className="flex flex-col h-full bg-slate-50 w-full z-20 absolute inset-0 animate-fade-in-up">
-            <div className="p-4 bg-white shadow-sm flex items-center shrink-0 sticky top-0 z-10 border-b border-gray-200">
-              <Button type="text" icon={<ArrowLeftOutlined />} onClick={navigateBack} className="mr-2" size="large" />
-              <Title level={4} className="m-0 text-gray-800">Gán xe vào tài khoản</Title>
-            </div>
-            <div className="flex-1 overflow-y-auto pb-24">
-              <div className="p-4">
-                <VehicleAssignmentTab isManager={false} />
-              </div>
-            </div>
-          </div>
-        )}
 
         {isShowingDetail && selectedTicket && (
           <div className="flex flex-col h-full bg-slate-50 w-full z-20 absolute inset-0 animate-fade-in-right">
@@ -231,18 +278,30 @@ export const HelpdeskScreen = () => {
     );
   };
 
+  // ==========================================
+  // [RENDER]: GIAO DIỆN DESKTOP
+  // - Hiển thị theo dạng "Split Pane" (3 Cột): 
+  //   + Cột 1: Phân loại sự cố (Sidebar).
+  //   + Cột 2: Danh sách sự cố trong danh mục đã chọn (List Queue).
+  //   + Cột 3: Chi tiết sự cố hoặc Form tạo sự cố (Main View).
+  // ==========================================
   const renderDesktopView = () => (
     <div className="flex flex-row flex-1 h-full animate-fade-in bg-gray-100 p-4 gap-4 overflow-hidden">
       {/* Pane 1: Category Sidebar */}
       <div className={`w-64 bg-white rounded-2xl shadow-sm border border-gray-200 flex flex-col overflow-hidden shrink-0`}>
-        <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center shrink-0">
-          <Text strong className="text-gray-700 text-base">Phân loại sự cố</Text>
+        <div className="p-4 border-b border-gray-100 bg-gray-50 shrink-0">
+          <Button 
+            type="primary" 
+            icon={<PlusOutlined />} 
+            className="w-full h-11 rounded-xl font-semibold shadow-md shadow-blue-200 text-[15px] bg-blue-600 hover:bg-blue-500"
+            onClick={navigateToForm}
+          >
+            Gửi Yêu Cầu Mới
+          </Button>
         </div>
         <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2 pb-3">
           {[
             { id: 'ALL', label: 'Tất cả sự cố', icon: '📋', count: ticketsData.length },
-            { id: 'CREATE_INCIDENT', label: 'Tạo Sự Cố Mới', icon: '➕', count: 0 },
-            { id: 'ASSIGN_VEHICLE', label: 'Gán Xe Vào Tài Khoản', icon: '🔑', count: 0 },
             { id: 'ZONE_VIOLATION', label: 'Đỗ sai khu vực', icon: '🚨', count: ticketsData.filter((t: any) => t.type === 'ZONE_VIOLATION').length },
             { id: 'OVERSTAY', label: 'Quá giờ', icon: '🕒', count: ticketsData.filter((t: any) => t.type === 'OVERSTAY').length },
             { id: 'LOST_CARD', label: 'Báo mất thẻ', icon: '🔥', count: ticketsData.filter((t: any) => t.type === 'LOST_CARD').length },
@@ -320,20 +379,6 @@ export const HelpdeskScreen = () => {
             <div className="p-8 flex-1">
               <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-sm border border-gray-100 p-4">
                 <IncidentSubmitForm onSuccess={handleIncidentSuccess} userRole="CUSTOMER" />
-              </div>
-            </div>
-          </div>
-        ) : selectedCategory === 'ASSIGN_VEHICLE' && !selectedTicket ? (
-          <div className="flex flex-col h-full overflow-y-auto">
-            <div className="p-4 border-b border-gray-200 bg-slate-50 flex items-center justify-between shrink-0">
-              <div>
-                <Title level={4} className="m-0 text-blue-700">Gán xe vào tài khoản</Title>
-                <Text className="text-sm text-gray-500">Khai báo thông tin xe đang đỗ để theo dõi sự cố</Text>
-              </div>
-            </div>
-            <div className="p-8 flex-1">
-              <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-                <VehicleAssignmentTab isManager={false} />
               </div>
             </div>
           </div>
