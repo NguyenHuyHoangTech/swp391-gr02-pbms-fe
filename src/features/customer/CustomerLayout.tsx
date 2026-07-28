@@ -1,11 +1,11 @@
 /**
- * @Author: Thái Tân Phú 
- * @Date: 2026-07-05
- * @Description: Main layout wrapper for the Customer portal. Includes top navigation header, responsive mobile drawer, and footer.
+ * @Author: Thái Tân Phú
+ * @Date: 28/07/2026
+ * @Description: Layout chung cho cổng thông tin Khách hàng (Customer Portal). Bao gồm Header điều hướng, thanh Menu trượt (Drawer) trên Mobile và Footer thông tin.
  * @Dependencies: 
- * - Zustand (useAuthStore)
- * - WebSocket (useWebSocket)
- * - React Query (public-building-profile API)
+ * - Zustand (useAuthStore) để quản lý phiên đăng nhập
+ * - WebSocket (useWebSocket) để báo trạng thái kết nối hệ thống
+ * - React Query (public-building-profile API) lấy cấu hình chung của tòa nhà
  */
 import React, { useState } from 'react';
 import { Layout, Menu, Dropdown, Button, Drawer } from 'antd';
@@ -15,6 +15,7 @@ import {
   HistoryOutlined, 
   CustomerServiceOutlined,
   LogoutOutlined,
+
   IdcardOutlined,
   MenuOutlined,
   SettingOutlined,
@@ -43,6 +44,10 @@ export const CustomerLayout = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
 
+  // ==========================================
+  // [DATA]: LẤY THÔNG TIN CẤU HÌNH TÒA NHÀ (BUILDING PROFILE)
+  // - Mã giả: Gọi API `/public/building-profile` để lấy thông tin như Hotline, Email, Tên tòa nhà để hiển thị dưới Footer.
+  // ==========================================
   const { data: buildingProfile } = useQuery({
     queryKey: ['public-building-profile'],
     queryFn: async () => {
@@ -55,11 +60,21 @@ export const CustomerLayout = () => {
     }
   });
 
+  // ==========================================
+  // [ACTION]: ĐĂNG XUẤT
+  // - Gọi hàm logout() từ store Zustand để xóa thông tin phiên đăng nhập.
+  // - Dùng react-router-dom để chuyển hướng (navigate) người dùng về trang '/login'.
+  // ==========================================
   const handleLogout = () => {
     logout();
     navigate('/login');
   };
 
+  // ==========================================
+  // [CONFIG]: DANH SÁCH MENU ĐIỀU HƯỚNG (NAV LINKS)
+  // - Khai báo cấu trúc đường dẫn (key) và tên hiển thị (label) cho Navbar.
+  // - Sử dụng cho cả Menu Desktop (Header) và Menu Mobile (Drawer).
+  // ==========================================
   const navLinks = [
     { key: '/customer/home', label: 'Trang chủ' },
     { key: '/customer/pre-booking', label: 'Đặt chỗ (Booking)' },
@@ -68,6 +83,11 @@ export const CustomerLayout = () => {
     { key: '/customer/helpdesk', label: 'Hỗ trợ (e-KYC)' },
   ];
 
+  // ==========================================
+  // [CONFIG]: MENU NGƯỜI DÙNG (AVATAR DROPDOWN)
+  // - Khai báo các menu item xổ xuống khi click vào Avatar ở Desktop.
+  // - Các hành động: Mở Cài đặt, Xem Quy định, Đăng xuất.
+  // ==========================================
   const userMenu: any = {
     items: [
       { key: 'settings', icon: <SettingOutlined />, label: 'Setting', onClick: () => setIsSettingsOpen(true) },
@@ -80,7 +100,10 @@ export const CustomerLayout = () => {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans selection:bg-blue-500/30">
       
-      {/* Glass Header */}
+      {/* ========================================== */}
+      {/* [RENDER]: HEADER TRONG SUỐT (GLASS HEADER) */}
+      {/* - Bao gồm: Logo, Menu điều hướng (Desktop), Đồng hồ, Trạng thái Hệ thống, Avatar và Nút Menu Mobile. */}
+      {/* ========================================== */}
       <header className="fixed w-full top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-200/60 shadow-sm">
           <div className="max-w-[1400px] mx-auto px-4 lg:px-6 h-20 flex items-center justify-between">
               <div className="flex items-center gap-4 lg:gap-8 xl:gap-12">
@@ -142,7 +165,10 @@ export const CustomerLayout = () => {
           </div>
       </header>
       
-      {/* Mobile Drawer */}
+      {/* ========================================== */}
+      {/* [RENDER]: MENU TRƯỢT DI ĐỘNG (MOBILE DRAWER) */}
+      {/* - Hiển thị khi người dùng ấn vào icon Menu trên màn hình nhỏ. */}
+      {/* ========================================== */}
       <Drawer
         title={<span className="font-bold text-slate-800">Menu</span>}
         placement="right"
@@ -180,6 +206,10 @@ export const CustomerLayout = () => {
         <Outlet />
       </Content>
 
+      {/* ========================================== */}
+      {/* [RENDER]: FOOTER THÔNG TIN */}
+      {/* - Hiển thị thông tin liên hệ, hotline, địa chỉ tòa nhà lấy từ API `buildingProfile`. */}
+      {/* ========================================== */}
       <footer className="bg-white border-t border-slate-200 pt-16 pb-8">
           <div className="max-w-7xl mx-auto px-6">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-12 border-b border-slate-100 pb-12 mb-8">
@@ -224,6 +254,11 @@ export const CustomerLayout = () => {
           </div>
       </footer>
 
+      {/* ========================================== */}
+      {/* [COMPONENTS]: CÁC MODAL ẨN (SETTINGS & RULES) */}
+      {/* - UserProfileSettingsModal: Modal Cài đặt cá nhân. */}
+      {/* - BuildingRulesModal: Modal xem Quy định bãi đỗ xe. */}
+      {/* ========================================== */}
       <UserProfileSettingsModal 
         isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)} 
