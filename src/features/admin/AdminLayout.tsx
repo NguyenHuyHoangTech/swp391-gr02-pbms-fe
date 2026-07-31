@@ -1,4 +1,7 @@
 /**
+ * @Author: Phạm Anh Tuấn
+ * @Date: 12/06/2026
+ * 
  * =========================================================================================
  * CHI TIẾT VÒNG ĐỜI VÀ KIẾN TRÚC KHUNG GIAO DIỆN QUẢN TRỊ (ADMIN LAYOUT ARCHITECTURE)
  * (Trình bày chi tiết luồng dữ liệu ánh xạ trực tiếp vào các dòng code trong file này)
@@ -49,14 +52,14 @@ import { Layout, Menu, Typography, Avatar, Dropdown } from 'antd'; // Các compo
 // PHẦN 2: BỘ ICON ĐỒ HỌA ANTD ICONS
 // Công dụng: Bộ Icon minh họa cho từng danh mục Menu điều hướng và các nút thao tác.
 // =========================================================================
-import {
-    UserOutlined,
-    SettingOutlined,
-    HistoryOutlined,
-    LogoutOutlined,
-    MenuFoldOutlined,
-    MenuUnfoldOutlined,
-    ReadOutlined
+import { 
+  UserOutlined, 
+  SettingOutlined, 
+  HistoryOutlined, 
+  LogoutOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  ReadOutlined
 } from '@ant-design/icons'; // Bộ Icon thao tác và điều hướng.
 
 // =========================================================================
@@ -82,135 +85,135 @@ const { Text } = Typography;
  * Khung giao diện dùng chung cho toàn bộ phân hệ Admin (Sider điều hướng bên trái, Header trên cùng và Content động).
  */
 export const AdminLayout = () => {
-    // --- KHỞI TẠO STATE VÀ HOOKS ĐIỀU HƯỚNG ---
-    const [collapsed, setCollapsed] = useState(false); // Trạng thái thu gọn/mở rộng thanh Sidebar
-    const navigate = useNavigate(); // Hook chuyển hướng màn hình
-    const location = useLocation(); // Hook lấy thông tin đường dẫn URL hiện tại
-    const logout = useAuthStore((state) => state.logout); // Hàm đăng xuất từ Auth Store
-    const email = useAuthStore((state) => state.email); // Email tài khoản đang đăng nhập
-    const [isSettingsOpen, setIsSettingsOpen] = useState(false); // Trạng thái ẩn/hiện Modal cài đặt cá nhân
-    const [isRulesOpen, setIsRulesOpen] = useState(false); // Trạng thái ẩn/hiện Modal nội quy tòa nhà
+  // --- KHỞI TẠO STATE VÀ HOOKS ĐIỀU HƯỚNG ---
+  const [collapsed, setCollapsed] = useState(false); // Trạng thái thu gọn/mở rộng thanh Sidebar
+  const navigate = useNavigate(); // Hook chuyển hướng màn hình
+  const location = useLocation(); // Hook lấy thông tin đường dẫn URL hiện tại
+  const logout = useAuthStore((state) => state.logout); // Hàm đăng xuất từ Auth Store
+  const email = useAuthStore((state) => state.email); // Email tài khoản đang đăng nhập
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false); // Trạng thái ẩn/hiện Modal cài đặt cá nhân
+  const [isRulesOpen, setIsRulesOpen] = useState(false); // Trạng thái ẩn/hiện Modal nội quy tòa nhà
 
-    /** Xử lý đăng xuất tài khoản và đưa người dùng về trang đăng nhập */
-    const handleLogout = () => {
-        logout();
-        navigate('/login');
-    };
+  /** Xử lý đăng xuất tài khoản và đưa người dùng về trang đăng nhập */
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
-    /** Danh sách các mục chuyển trang trên thanh Sidebar bên trái */
-    const menuItems = [
-        {
-            key: '/admin/users',
-            icon: <UserOutlined />,
-            label: 'User Management',
-        },
-        {
-            key: '/admin/system-configs',
-            icon: <SettingOutlined />,
-            label: 'System Config',
-        },
-        {
-            key: '/admin/audit-logs',
-            icon: <HistoryOutlined />,
-            label: 'Active Log',
-        },
-    ];
+  /** Danh sách các mục chuyển trang trên thanh Sidebar bên trái */
+  const menuItems = [
+    {
+      key: '/admin/users',
+      icon: <UserOutlined />,
+      label: 'User Management',
+    },
+    {
+      key: '/admin/system-configs',
+      icon: <SettingOutlined />,
+      label: 'System Config',
+    },
+    {
+      key: '/admin/audit-logs',
+      icon: <HistoryOutlined />,
+      label: 'Active Log',
+    },
+  ];
 
-    /** Cấu hình các tính năng trong Menu thả xuống (Dropdown) khi bấm vào Avatar người dùng */
-    const userMenu: any = {
-        items: [
-            {
-                key: 'settings',
-                icon: <SettingOutlined />,
-                label: 'Account Settings',
-                onClick: () => setIsSettingsOpen(true),
-            },
-            {
-                key: 'rules',
-                icon: <ReadOutlined />,
-                label: 'Nội Quy',
-                onClick: () => setIsRulesOpen(true),
-            },
-            {
-                key: 'logout',
-                icon: <LogoutOutlined />,
-                label: 'Logout',
-                onClick: handleLogout,
-                danger: true,
-            },
-        ],
-    };
+  /** Cấu hình các tính năng trong Menu thả xuống (Dropdown) khi bấm vào Avatar người dùng */
+  const userMenu: any = {
+    items: [
+      {
+        key: 'settings',
+        icon: <SettingOutlined />,
+        label: 'Account Settings',
+        onClick: () => setIsSettingsOpen(true),
+      },
+      {
+        key: 'rules',
+        icon: <ReadOutlined />,
+        label: 'Nội Quy',
+        onClick: () => setIsRulesOpen(true),
+      },
+      {
+        key: 'logout',
+        icon: <LogoutOutlined />,
+        label: 'Logout',
+        onClick: handleLogout,
+        danger: true,
+      },
+    ],
+  };
 
-    // =========================================================================
-    // PHẦN 6: RENDER GIAO DIỆN COMPONENT LAYOUT (JSX)
-    // =========================================================================
-    return (
-        <Layout className="min-h-screen">
-            {/* 1. THANH ĐIỀU HƯỚNG BÊN (SIDER - SIDEBAR) */}
-            <Sider
-                trigger={null}
-                collapsible
-                collapsed={collapsed}
-                theme="light"
-                className="shadow-md z-10"
-            >
-                {/* LOGO DỰ ÁN HỆ THỐNG */}
-                <div className="h-16 flex items-center justify-center border-b border-gray-100">
-                    <Text strong className={`text-blue-600 transition-all ${collapsed ? 'text-lg' : 'text-xl'}`}>
-                        {collapsed ? 'PBMS' : 'PBMS Admin'}
-                    </Text>
-                </div>
-                {/* MENU CHUYỂN PHÂN HỆ NỘI BỘ */}
-                <Menu
-                    theme="light"
-                    mode="inline"
-                    selectedKeys={[location.pathname]}
-                    items={menuItems}
-                    onClick={({ key }) => navigate(key)}
-                    className="border-r-0 mt-4"
-                />
-            </Sider>
+  // =========================================================================
+  // PHẦN 6: RENDER GIAO DIỆN COMPONENT LAYOUT (JSX)
+  // =========================================================================
+  return (
+    <Layout className="min-h-screen">
+      {/* 1. THANH ĐIỀU HƯỚNG BÊN (SIDER - SIDEBAR) */}
+      <Sider 
+        trigger={null} 
+        collapsible 
+        collapsed={collapsed}
+        theme="light"
+        className="shadow-md z-10"
+      >
+        {/* LOGO DỰ ÁN HỆ THỐNG */}
+        <div className="h-16 flex items-center justify-center border-b border-gray-100">
+          <Text strong className={`text-blue-600 transition-all ${collapsed ? 'text-lg' : 'text-xl'}`}>
+            {collapsed ? 'PBMS' : 'PBMS Admin'}
+          </Text>
+        </div>
+        {/* MENU CHUYỂN PHÂN HỆ NỘI BỘ */}
+        <Menu
+          theme="light"
+          mode="inline"
+          selectedKeys={[location.pathname]}
+          items={menuItems}
+          onClick={({ key }) => navigate(key)}
+          className="border-r-0 mt-4"
+        />
+      </Sider>
+      
+      {/* 2. KHUNG NỘI DUNG CHÍNH VA HEADER */}
+      <Layout>
+        {/* THANH THAO TÁC PHÍA TRÊN (HEADER) */}
+        <Header className="bg-white px-4 flex justify-between items-center shadow-sm z-0" style={{ backgroundColor: '#ffffff' }}>
+          {/* NÚT THU GỌN / MỞ RỘNG SIDEBAR */}
+          <div 
+            className="cursor-pointer text-lg text-gray-600 hover:text-blue-600 transition-colors"
+            onClick={() => setCollapsed(!collapsed)}
+          >
+            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+          </div>
+          
+          {/* VÙNG THỜI GIAN THỰC VÀ AVATAR NGƯỜI DÙNG */}
+          <div className="flex items-center gap-4">
+            <SystemClock />
+            <Dropdown menu={userMenu} placement="bottomRight" arrow>
+              <div className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 px-2 py-1 rounded transition-colors">
+                <Avatar icon={<UserOutlined />} className="bg-blue-600" />
+                <Text strong className="text-gray-700 hidden sm:block">{email || 'Admin'}</Text>
+              </div>
+            </Dropdown>
+          </div>
+        </Header>
+        
+        {/* VÙNG HIỂN THỊ NỘI DUNG TRANG CON (CONTENT) */}
+        <Content className="bg-gray-50 m-0 flex flex-col flex-1 overflow-y-auto">
+          {/* Nơi tự động render giao diện của các route con (nested child routes) */}
+          <Outlet />
+        </Content>
+      </Layout>
 
-            {/* 2. KHUNG NỘI DUNG CHÍNH VA HEADER */}
-            <Layout>
-                {/* THANH THAO TÁC PHÍA TRÊN (HEADER) */}
-                <Header className="bg-white px-4 flex justify-between items-center shadow-sm z-0" style={{ backgroundColor: '#ffffff' }}>
-                    {/* NÚT THU GỌN / MỞ RỘNG SIDEBAR */}
-                    <div
-                        className="cursor-pointer text-lg text-gray-600 hover:text-blue-600 transition-colors"
-                        onClick={() => setCollapsed(!collapsed)}
-                    >
-                        {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                    </div>
-
-                    {/* VÙNG THỜI GIAN THỰC VÀ AVATAR NGƯỜI DÙNG */}
-                    <div className="flex items-center gap-4">
-                        <SystemClock />
-                        <Dropdown menu={userMenu} placement="bottomRight" arrow>
-                            <div className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 px-2 py-1 rounded transition-colors">
-                                <Avatar icon={<UserOutlined />} className="bg-blue-600" />
-                                <Text strong className="text-gray-700 hidden sm:block">{email || 'Admin'}</Text>
-                            </div>
-                        </Dropdown>
-                    </div>
-                </Header>
-
-                {/* VÙNG HIỂN THỊ NỘI DUNG TRANG CON (CONTENT) */}
-                <Content className="bg-gray-50 m-0 flex flex-col flex-1 overflow-y-auto">
-                    {/* Nơi tự động render giao diện của các route con (nested child routes) */}
-                    <Outlet />
-                </Content>
-            </Layout>
-
-            {/* 3. KHỐI CÁC MODAL HỆ THỐNG DÙNG CHUNG TOÀN ADMIN */}
-            <UserProfileSettingsModal
-                isOpen={isSettingsOpen}
-                onClose={() => setIsSettingsOpen(false)}
-            />
-            <BuildingRulesModal
-                isOpen={isRulesOpen}
-                onClose={() => setIsRulesOpen(false)}
-            />
-        </Layout>
-    );
+      {/* 3. KHỐI CÁC MODAL HỆ THỐNG DÙNG CHUNG TOÀN ADMIN */}
+      <UserProfileSettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+      />
+      <BuildingRulesModal
+        isOpen={isRulesOpen}
+        onClose={() => setIsRulesOpen(false)}
+      />
+    </Layout>
+  );
 };
