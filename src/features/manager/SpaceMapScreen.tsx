@@ -13,26 +13,69 @@
  * - @tanstack/react-query (External) - fetch/cache cấu hình bản đồ
  * - antd, @ant-design/icons (External) - UI panel cấu hình
  */
+/**
+ * ============================================================================
+ * [IMPORT LIBRARIES & UTILITIES] - Các thư viện và tiện ích hỗ trợ
+ * ============================================================================
+ * 1. React & Hooks: useState, useEffect, useRef... quản lý trạng thái và canvas ref.
+ * 2. Ant Design (antd): UI component cho Thanh công cụ và Cột thuộc tính (Inspector).
+ * 3. React-Konva & Konva: Engine đồ họa 2D Canvas (Stage, Layer, Group, Rect, Line...).
+ * 4. TanStack React Query: useQuery, useMutation cho việc tải & lưu cấu hình bản đồ.
+ * 5. STOMP WebSocket (useWebSocket): Lắng nghe kênh real-time /topic/slots/status.
+ * ============================================================================
+ */
 import React, { useState, useEffect, useRef } from 'react';
-import { Typography, Button, message, Spin, Input, Select, InputNumber, Collapse, Slider, Switch, Radio, notification, Badge, Tooltip, Modal } from 'antd';
+import { Typography, Button, message, Input, Select, InputNumber, Collapse, Switch, Badge, Modal } from 'antd';
 import {
   SaveOutlined, SyncOutlined, AimOutlined, PlusOutlined,
-  SettingOutlined, CompassOutlined, GatewayOutlined,
-  CloseCircleOutlined, SwapRightOutlined, SwapLeftOutlined,
-  StopOutlined, DeleteOutlined, ZoomInOutlined, ZoomOutOutlined
+  CompassOutlined, GatewayOutlined, DeleteOutlined
 } from '@ant-design/icons';
 import { Stage, Layer, Line, Group, Rect, Text as KonvaText, Label, Tag, Image as KonvaImage } from 'react-konva';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axiosClient from '../../core/api/axiosClient';
 import { getImageUrl } from '../../core/utils/imageHelper';
 import { useWebSocket } from '../../core/websocket/useWebSocket';
 import Konva from 'konva';
 
 /**
- * @Function: URLImage
- * @Description: Vẽ 1 ảnh (icon loại xe) lên canvas Konva. Tự nạp ảnh bất đồng bộ,
- *   chỉ render sau khi ảnh load xong để tránh vẽ ảnh rỗng.
+ * ============================================================================
+ * MÔ TẢ TỔNG QUAN VỀ LUỒNG DỮ LIỆU & TƯƠNG TÁC CỦA SPACE MAP SCREEN
+ * ============================================================================
+ *
+ * [PHẦN 1] MỤC ĐÍCH & VAI TRÒ CỦA COMPONENT:
+ *    - Giao diện Thiết kế & Quản trị Không gian bãi đỗ (Interactive Space Map)
+ *      dành cho Quản lý (Manager), xây dựng trên engine đồ họa 2D Konva.js.
+ *    - Chịu trách nhiệm: Hiển thị sơ đồ mặt bằng bãi đỗ, phân chia khu vực (Zone),
+ *      bố trí cổng vào/ra (Gate), giám sát trạng thái từng ô đỗ (Slot) theo thời
+ *      gian thực và cho phép chỉnh sửa tọa độ (kéo thả, xoay, mở rộng kích thước).
+ *
+ * [PHẦN 2] GIẢI PHẪU VÒNG ĐỜI DỮ LIỆU (DATA FLOW LIFECYCLE) KÈM MINH CHỨNG:
+ *
+ * BƯỚC 1: TẢI CẤU HÌNH SƠ ĐỒ BÃI XE (LOAD MAP CONFIG)
+ * - Minh chứng (API): Gọi `GET /infrastructure/map/config` qua `useQuery` tải
+ *   toàn bộ Tầng (Floors), Khu vực (Zones), Cổng (Gates), Loại phương tiện (VehicleTypes)
+ *   và cấu trúc ma trận grid (`GRID_SIZE = 50px`).
+ *
+ * BƯỚC 2: GIÁM SÁT TRẠNG THÁI Ô ĐỖ THỜI GIAN THỰC (REAL-TIME WEBSOCKET SLOT SYNC)
+ * - Minh chứng (WebSocket): Đăng ký lắng nghe kênh `/topic/slots/status` qua STOMP.
+ *   Khi cảm biến siêu âm IoT báo ô đỗ thay đổi, sơ đồ lập tức chuyển màu ô:
+ *   + Xanh lá (`EMPTY`): Ô đỗ đang trống.
+ *   + Đỏ (`OCCUPIED`): Ô đỗ đang có xe đậu.
+ *   + Vàng/Xám (`DISABLED`): Ô đang bảo trì hoặc cấm đậu.
+ *
+ * BƯỚC 3: THAO TÁC CẤU HÌNH & KIỂM TRA VA CHẠM TỌA ĐỘ (DRAG & DROP WITH COLLISION)
+ * - Minh chứng (Konva Logic): Sử dụng `onDragMove` & `onDragEnd` kết hợp thuật
+ *   toán `checkIntersection` ngăn chặn các Zone/Gate bị đè lên nhau hoặc rơi khỏi
+ *   biên giới mặt bằng (Map Boundaries).
+ *
+ * BƯỚC 4: BẢO TRÌ Ô ĐỖ & LƯU CẤU HÌNH SƠ ĐỒ (SLOT MAINTENANCE & PERSISTENCE)
+ * - Minh chứng 1 (API Slot Status): Gọi `PUT /infrastructure/slots/{slotId}/status`
+ *   để bật/tắt trạng thái bảo trì (`DISABLED` / `EMPTY`).
+ * - Minh chứng 2 (API Map Save): Gọi `POST /infrastructure/map/save` gửi toàn bộ
+ *   cấu hình Floors, Zones, Gates, Slots về cơ sở dữ liệu 3NF.
+ * ============================================================================
  */
+
 const URLImage = ({ src, x, y, width, height }: { src: string, x: number, y: number, width: number, height: number }) => {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   useEffect(() => {
@@ -48,9 +91,14 @@ const URLImage = ({ src, x, y, width, height }: { src: string, x: number, y: num
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
 
-/** Kích thước (px) của 1 ô lưới. Mọi toạ độ/kích thước trên canvas là bội số của giá trị này để snap vào lưới chính xác. */
+// Constants & Types
 const GRID_SIZE = 50;
 
+/**
+ * ============================================================================
+ * [DTO DEFINITIONS] - CÁC INTERFACE DỮ LIỆU CỦA SPACE MAP SCREEN
+ * ============================================================================
+ */
 interface Floor {
   id: number;
   name: string;
@@ -79,6 +127,7 @@ interface Zone {
   layoutY: number;
   rotation: number;
   slots: Slot[];
+
   activeReservationsCount?: number;
 }
 
@@ -93,7 +142,6 @@ interface Gate {
   layoutY: number;
   rotation: number;
   vehicleTypeId?: number;
-  pendingCommand?: string | null;
 }
 
 interface VehicleType {
@@ -111,26 +159,40 @@ type SelectedEntity =
   | { type: 'GATE'; id: string | number }
   | null;
 
-/**
- * @Function: getVehicleDimensions
- * @Description: Tính kích thước thật (px) của 1 chỗ đỗ theo loại xe. Trả về kích
- *   thước mặc định 3x6 ô nếu không tìm thấy loại xe, tránh vẽ hình kích thước 0.
- */
 const getVehicleDimensions = (typeId: number, vehicleTypes: VehicleType[]) => {
   const type = vehicleTypes.find(v => v.id === typeId);
   if (type) {
-      return { width: type.matrixWidth * GRID_SIZE, height: type.matrixHeight * GRID_SIZE };
+    return { width: type.matrixWidth * GRID_SIZE, height: type.matrixHeight * GRID_SIZE };
   }
   return { width: 3 * GRID_SIZE, height: 6 * GRID_SIZE };
 };
 
+/**
+ * ============================================================================
+ * [MAIN COMPONENT] - SPACE MAP SCREEN
+ * ============================================================================
+ * Màn hình thiết kế, điều chỉnh sơ đồ không gian 2D và quản trị trạng thái
+ * các ô đỗ, cổng vào/ra theo tầng bãi đỗ.
+ * ============================================================================
+ */
 export const SpaceMapScreen = () => {
+  const queryClient = useQueryClient();
 
+  /**
+   * ============================================================================
+   * [QUẢN LÝ TRẠNG THÁI] - CÁC STATE NÒNG CỐT CỦA SƠ ĐỒ
+   * ============================================================================
+   * - zones, gates, floors, vehicleTypes: Dữ liệu cấu hình tải về từ Backend.
+   * - selectedEntity: Đối tượng đang chọn trên sơ đồ ('ZONE', 'SLOT', 'GATE' hay null)
+   *   để hiển thị thuộc tính chỉnh sửa trên Inspector bên phải.
+   * - collidingNodeId: ID của node đang xảy ra va chạm (đè lên node khác hoặc ngoài bản đồ).
+   * - isDirty: Cờ nhận biết cấu hình sơ đồ có sự thay đổi so với bản gốc trên DB.
+   * ============================================================================
+   */
   const [zones, setZones] = useState<Zone[]>([]);
   const [gates, setGates] = useState<Gate[]>([]);
   const [floors, setFloors] = useState<Floor[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
-
   const [selectedEntity, setSelectedEntity] = useState<SelectedEntity>(null);
   const [expandedKeys, setExpandedKeys] = useState<string[]>(['0', '1', '2', '4']);
   const [collidingNodeId, setCollidingNodeId] = useState<string | null>(null);
@@ -138,11 +200,12 @@ export const SpaceMapScreen = () => {
   const getComparableMapState = (f: Floor[], z: Zone[], g: Gate[]) => {
     return {
       floors: f,
-      zones: z.map(zone => ({ ...zone, slots: [] })),
+      zones: z.map(zone => ({ ...zone, slots: [] })), // Ignore transient slot states
       gates: g
     };
   };
 
+  // Helper for deep comparison
   const deepEqual = (obj1: any, obj2: any): boolean => {
     if (obj1 === obj2) return true;
     if (typeof obj1 !== 'object' || typeof obj2 !== 'object' || obj1 == null || obj2 == null) return false;
@@ -158,23 +221,13 @@ export const SpaceMapScreen = () => {
   const [initialMapState, setInitialMapState] = useState<any>(null);
   const isDirty = initialMapState !== null && !deepEqual(getComparableMapState(floors, zones, gates), initialMapState);
 
+  // Floors State
   const [selectedFloorId, setSelectedFloorId] = useState<number>(1);
 
   const activeFloor = floors.find(f => f.id === selectedFloorId);
   const mapCols = activeFloor?.mapCols || 60;
   const mapRows = activeFloor?.mapRows || 40;
 
-  /**
-   * @Function: handleUpdateMapSize
-   * @Description: Đổi số cột/hàng của tầng đang chọn, chặn nếu kích thước mới làm
-   *   Zone/Gate (đã tính góc xoay) rớt ra ngoài biên bản đồ.
-   * @Logic_Steps:
-   * 1. Tính biên mới mapW/mapH theo cols/rows.
-   * 2. Với mỗi Zone của tầng: tính bounding box thật theo rotation, nếu vượt biên -> isOutside.
-   * 3. Nếu Zone hợp lệ, lặp tương tự cho Gate.
-   * 4. Nếu isOutside -> báo lỗi, dừng.
-   * 5. Ngược lại cập nhật mapCols/mapRows cho đúng tầng đang chọn.
-   */
   const handleUpdateMapSize = (cols: number, rows: number) => {
     const mapW = cols * GRID_SIZE;
     const mapH = rows * GRID_SIZE;
@@ -182,49 +235,49 @@ export const SpaceMapScreen = () => {
 
     const currentZones = zones.filter(z => z.floorId === selectedFloorId);
     for (const z of currentZones) {
-       const { width: slotW, height: slotH } = getVehicleDimensions(z.vehicleTypeId, vehicleTypes);
-       let zw = z.capacity * slotW;
-       let zh = slotH;
-       if (z.rotation === 90 || z.rotation === 270) { zw = slotH; zh = z.capacity * slotW; }
+      const { width: slotW, height: slotH } = getVehicleDimensions(z.vehicleTypeId, vehicleTypes);
+      let zw = z.capacity * slotW;
+      let zh = slotH;
+      if (z.rotation === 90 || z.rotation === 270) { zw = slotH; zh = z.capacity * slotW; }
 
-       let zx = z.layoutX; let zy = z.layoutY;
-       if (z.rotation === 90) zx -= zw;
-       else if (z.rotation === 180) { zx -= zw; zy -= zh; }
-       else if (z.rotation === 270) zy -= zh;
+      let zx = z.layoutX; let zy = z.layoutY;
+      if (z.rotation === 90) zx -= zw;
+      else if (z.rotation === 180) { zx -= zw; zy -= zh; }
+      else if (z.rotation === 270) zy -= zh;
 
-       if (zx + zw > mapW || zy + zh > mapH) {
-           isOutside = true;
-           break;
-       }
+      if (zx + zw > mapW || zy + zh > mapH) {
+        isOutside = true;
+        break;
+      }
     }
 
     if (!isOutside) {
-        const currentGates = gates.filter(g => g.floorId === selectedFloorId);
-        for (const g of currentGates) {
-           let gw = 3 * GRID_SIZE;
-           let gh = GRID_SIZE;
-           if (g.vehicleTypeId) {
-               const vt = vehicleTypes.find(v => v.id === g.vehicleTypeId);
-               if (vt) gw = vt.matrixWidth * GRID_SIZE;
-           }
-           if (g.rotation === 90 || g.rotation === 270) {
-               const temp = gw; gw = gh; gh = temp;
-           }
-           let gx = g.layoutX; let gy = g.layoutY;
-           if (g.rotation === 90) gx -= gw;
-           else if (g.rotation === 180) { gx -= gw; gy -= gh; }
-           else if (g.rotation === 270) gy -= gh;
-
-           if (gx + gw > mapW || gy + gh > mapH) {
-               isOutside = true;
-               break;
-           }
+      const currentGates = gates.filter(g => g.floorId === selectedFloorId);
+      for (const g of currentGates) {
+        let gw = 3 * GRID_SIZE;
+        let gh = GRID_SIZE;
+        if (g.vehicleTypeId) {
+          const vt = vehicleTypes.find(v => v.id === g.vehicleTypeId);
+          if (vt) gw = vt.matrixWidth * GRID_SIZE;
         }
+        if (g.rotation === 90 || g.rotation === 270) {
+          const temp = gw; gw = gh; gh = temp;
+        }
+        let gx = g.layoutX; let gy = g.layoutY;
+        if (g.rotation === 90) gx -= gw;
+        else if (g.rotation === 180) { gx -= gw; gy -= gh; }
+        else if (g.rotation === 270) gy -= gh;
+
+        if (gx + gw > mapW || gy + gh > mapH) {
+          isOutside = true;
+          break;
+        }
+      }
     }
 
     if (isOutside) {
-        message.error('Không thể giảm kích thước vì có Zone hoặc Gate bị rớt ra ngoài bản đồ!');
-        return;
+      message.error('Cannot reduce size because a Zone or Gate falls outside the map!');
+      return;
     }
 
     setFloors(prev => prev.map(f => f.id === selectedFloorId ? { ...f, mapCols: cols, mapRows: rows } : f));
@@ -241,9 +294,13 @@ export const SpaceMapScreen = () => {
   const { stompClient, connected } = useWebSocket();
 
   /**
-   * @Function: mapConfig query
-   * @Description: Lấy toàn bộ cấu hình bản đồ (floors/zones/gates/vehicleTypes) 1
-   *   lần khi vào màn hình. BE bọc dữ liệu trong ApiResponse nên phải bóc res.data.data.
+   * ============================================================================
+   * [API 1] TẢI CẤU HÌNH SƠ ĐỒ KHÔNG GIAN BÃI XE (MAP CONFIGURATION)
+   * ============================================================================
+   * Endpoint: `GET /infrastructure/map/config`
+   * Mục đích: Tải danh sách Tầng, Khu vực, Cổng, Loại phương tiện cùng tọa độ,
+   *          hướng xoay (rotation) và kích thước lưới để dựng sơ đồ Canvas.
+   * ============================================================================
    */
   const { data: mapConfigData, refetch } = useQuery({
     queryKey: ['mapConfig'],
@@ -253,10 +310,6 @@ export const SpaceMapScreen = () => {
     }
   });
 
-  /**
-   * @Description: Đồng bộ dữ liệu server vào state cục bộ để người dùng chỉnh sửa
-   *   trước khi Save. Nếu tầng đang chọn không còn tồn tại thì nhảy về tầng đầu tiên.
-   */
   useEffect(() => {
     if (mapConfigData) {
       if (mapConfigData.floors && mapConfigData.floors.length > 0) {
@@ -268,23 +321,28 @@ export const SpaceMapScreen = () => {
       if (mapConfigData.zones) setZones(mapConfigData.zones);
       if (mapConfigData.gates) setGates(mapConfigData.gates);
       if (mapConfigData.vehicleTypes) setVehicleTypes(mapConfigData.vehicleTypes);
-
       setInitialMapState(getComparableMapState(
-        mapConfigData.floors || [],
-        mapConfigData.zones || [],
+        mapConfigData.floors || [], 
+        mapConfigData.zones || [], 
         mapConfigData.gates || []
       ));
     }
   }, [mapConfigData]);
 
   /**
-   * @Description: Lắng nghe realtime trạng thái slot qua WebSocket và cập nhật vào
-   *   state. BE gửi "AVAILABLE" nhưng FE dùng "EMPTY" nên map lại giá trị này.
+   * ============================================================================
+   * [WEBSOCKET LISTENER] LẮNG NGHE TRẠNG THÁI Ô ĐỖ THEO THỜI GIAN THỰC
+   * ============================================================================
+   * Channel: `/topic/slots/status`
+   * Mục đích: Lắng nghe sự kiện báo cáo từ cảm biến siêu âm (IoT Ultrasonic Sensor)
+   *          để tự động đổi màu ô đỗ trên bản đồ (`OCCUPIED` <-> `EMPTY`) mà không
+   *          cần tải lại trang hay polling liên tục.
+   * ============================================================================
    */
   useEffect(() => {
     if (stompClient && connected) {
       const subscription = stompClient.subscribe('/topic/slots/status', (message) => {
-        const payload = JSON.parse(message.body);
+        const payload = JSON.parse(message.body); // e.g., { "slotId": 1, "status": "OCCUPIED" }
         setZones(prevZones => prevZones.map(z => ({
           ...z,
           slots: z.slots.map(s => {
@@ -302,30 +360,24 @@ export const SpaceMapScreen = () => {
     }
   }, [stompClient, connected]);
 
-  /**
-   * @Description: Khi đổi tầng, bỏ chọn Zone/Slot/Gate nếu nó không thuộc tầng mới,
-   *   tránh panel cấu hình hiển thị nhầm dữ liệu của tầng đang ẩn.
-   */
+  // Handle floor switch selection clear
   useEffect(() => {
     if (selectedEntity) {
-       let keep = false;
-       if (selectedEntity.type === 'ZONE' || selectedEntity.type === 'SLOT') {
-          const zId = selectedEntity.type === 'ZONE' ? (selectedEntity as any).id : selectedEntity.zoneId;
-          if (zones.find(z => z.id === zId)?.floorId === selectedFloorId) keep = true;
-       } else if (selectedEntity.type === 'GATE') {
-          if (gates.find(g => g.id === (selectedEntity as any).id)?.floorId === selectedFloorId) keep = true;
-       }
-       if (!keep) setSelectedEntity(null);
+      let keep = false;
+      if (selectedEntity.type === 'ZONE' || selectedEntity.type === 'SLOT') {
+        const zId = selectedEntity.type === 'ZONE' ? (selectedEntity as any).id : selectedEntity.zoneId;
+        if (zones.find(z => z.id === zId)?.floorId === selectedFloorId) keep = true;
+      } else if (selectedEntity.type === 'GATE') {
+        if (gates.find(g => g.id === (selectedEntity as any).id)?.floorId === selectedFloorId) keep = true;
+      }
+      if (!keep) setSelectedEntity(null);
     }
   }, [selectedFloorId, zones, gates]);
 
   const visibleZones = zones.filter(z => z.floorId === selectedFloorId);
   const visibleGates = gates.filter(g => g.floorId === selectedFloorId);
 
-  /**
-   * @Description: Theo dõi kích thước khung chứa canvas, cập nhật khi resize cửa sổ.
-   *   Delay 100ms để đợi layout flexbox tính xong, tránh đo sai lúc vừa mount.
-   */
+  // Handle resize
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
@@ -336,6 +388,7 @@ export const SpaceMapScreen = () => {
       }
     };
 
+    // Slight delay to ensure flex layout has computed
     const timer = setTimeout(updateSize, 100);
     window.addEventListener('resize', updateSize);
     return () => {
@@ -344,11 +397,7 @@ export const SpaceMapScreen = () => {
     };
   }, []);
 
-  /**
-   * @Description: Tính lại tỉ lệ zoom "vừa khít màn hình" và canh giữa canvas mỗi
-   *   khi kích thước bản đồ hoặc khung chứa đổi. Kết quả cũng làm defaultScale
-   *   (mức zoom-out tối thiểu).
-   */
+  // Fit to screen logic
   useEffect(() => {
     if (containerSize.width > 0 && containerSize.height > 0) {
       const mapW = mapCols * GRID_SIZE;
@@ -368,13 +417,16 @@ export const SpaceMapScreen = () => {
   }, [mapCols, mapRows, containerSize]);
 
   /**
-   * @Function: handleZoomToBox
-   * @Description: Zoom + trượt camera (Konva.Tween) tới đúng 1 vùng chữ nhật.
-   * @Logic_Steps:
-   * 1. Tính scaleX/scaleY để box vừa khít khung (trừ padding 2 mép).
-   * 2. Lấy min 2 tỉ lệ rồi kẹp vào [defaultScale, 4].
-   * 3. Tính tâm box, suy ra vị trí stage để tâm nằm giữa khung nhìn.
-   * 4. Chạy Tween 0.5s tới vị trí/tỉ lệ mới, kết thúc thì lưu vào state.
+   * ============================================================================
+   * [CANVAS EVENT HANDLERS & COLLISION ENGINE - BỘ XỬ LÝ TƯƠNG TÁC SƠ ĐỒ]
+   * ============================================================================
+   * - Quản lý camera viewport và hiệu ứng chuyển động (`Konva.Tween`):
+   *   + `handleZoomToBox` & `handleZoomZone`: Zoom cận cảnh và canh giữa viewport vào một khu vực.
+   * - Engine xử lý va chạm thời gian thực trong chế độ chỉnh sửa (Edit Mode):
+   *   + `checkIntersection`: Kiểm tra va chạm hình học (AABB - Axis-Aligned Bounding Box) giữa các đối tượng.
+   *   + `handleDragMove`: Lắng nghe tọa độ khi kéo thả, báo hiệu màu đỏ (`isColliding`) nếu đè lấn khu vực khác.
+   *   + `handleDragEnd`: Khôi phục vị trí ban đầu nếu người dùng thả chuột khi đang có va chạm.
+   * ============================================================================
    */
   const handleZoomToBox = (boxX: number, boxY: number, boxW: number, boxH: number, padding: number = 50) => {
     if (!stageRef.current || !containerRef.current) return;
@@ -408,55 +460,6 @@ export const SpaceMapScreen = () => {
     tween.play();
   };
 
-  /**
-   * @Function: handleZoom
-   * @Description: Zoom in/out theo tâm khung nhìn (dùng cho nút +/-), giữ nguyên
-   *   điểm đang nhìn ở giữa để không lệch vị trí.
-   */
-  const handleZoom = (factor: number) => {
-    if (!stageRef.current || !containerRef.current) return;
-    const oldScale = stageScale;
-    let newScale = oldScale * factor;
-    newScale = Math.max(defaultScale, Math.min(newScale, 5));
-
-    const center = {
-      x: containerRef.current.clientWidth / 2,
-      y: containerRef.current.clientHeight / 2,
-    };
-
-    const mousePointTo = {
-      x: (center.x - stagePos.x) / oldScale,
-      y: (center.y - stagePos.y) / oldScale,
-    };
-
-    setStageScale(newScale);
-    setStagePos({
-      x: center.x - mousePointTo.x * newScale,
-      y: center.y - mousePointTo.y * newScale,
-    });
-  };
-
-  /** @Description: Đưa canvas về tỉ lệ và vị trí "vừa khít màn hình" ban đầu. */
-  const handleZoomFit = () => {
-    if (!containerRef.current) return;
-    const mapW = mapCols * GRID_SIZE;
-    const mapH = mapRows * GRID_SIZE;
-
-    const scale = Math.min(containerRef.current.clientWidth / mapW, containerRef.current.clientHeight / mapH) * 0.95;
-    const minScaleLocked = Math.min(scale, 1);
-
-    setStageScale(minScaleLocked);
-    setStagePos({
-      x: (containerRef.current.clientWidth - mapW * minScaleLocked) / 2,
-      y: (containerRef.current.clientHeight - mapH * minScaleLocked) / 2
-    });
-  };
-
-  /**
-   * @Function: handleZoomZone
-   * @Description: Chọn 1 Zone và zoom camera tới đó. Tính lại bounding box theo góc
-   *   xoay vì layoutX/layoutY là điểm neo trước khi xoay, không phải góc trên-trái thật.
-   */
   const handleZoomZone = (zoneId: number) => {
     const zone = zones.find(z => z.id === zoneId);
     if (!zone) return;
@@ -479,7 +482,6 @@ export const SpaceMapScreen = () => {
     handleZoomToBox(boxX, boxY, zoneW, zoneH, 100);
   };
 
-  /** @Description: Kiểm tra 2 hình chữ nhật có chồng lấn không. Dùng chung cho phát hiện va chạm khi kéo thả và khi validate lúc Save. */
   const checkIntersection = (rect1: any, rect2: any) => {
     return !(
       rect2.x > rect1.x + rect1.width ||
@@ -489,21 +491,11 @@ export const SpaceMapScreen = () => {
     );
   };
 
-  /**
-   * @Function: handleDragMove
-   * @Description: Chạy liên tục khi kéo Zone/Gate. Quy đổi toạ độ hiển thị về toạ
-   *   độ thật, kiểm tra vượt biên và đè lên phần tử khác, chỉ đổi màu viền cảnh báo.
-   * @Logic_Steps:
-   * 1. Lấy client rect của node, quy về toạ độ bản đồ (bỏ zoom/pan).
-   * 2. Nếu vượt biên map -> hasCollision.
-   * 3. Ngược lại duyệt các zoneGroup/gateGroup anh em, nếu giao nhau -> hasCollision.
-   * 4. Đặt attr isColliding + cập nhật collidingNodeId để JSX tô viền đỏ nét đứt.
-   */
   const handleDragMove = (e: any, id: number | string, isZone: boolean) => {
     const node = e.target;
     const stage = node.getStage();
     const layer = node.getLayer();
-    const nodeRect = node.getClientRect({ skipTransform: false, skipShadow: true, skipStroke: true });
+    const nodeRect = node.getClientRect({ skipTransform: false, skipStroke: true, skipShadow: true });
     const mapW = mapCols * GRID_SIZE;
     const mapH = mapRows * GRID_SIZE;
 
@@ -518,12 +510,14 @@ export const SpaceMapScreen = () => {
 
     let hasCollision = false;
 
+    // Bounds check
     if (absRect.x < 0 || absRect.y < 0 || absRect.x + absRect.width > mapW || absRect.y + absRect.height > mapH) {
       hasCollision = true;
     } else {
+      // Sibling collision check
       for (const child of layer.getChildren()) {
         if (child !== node && (child.name() === 'zoneGroup' || child.name() === 'gateGroup')) {
-          const otherRect = child.getClientRect({ skipTransform: false, skipShadow: true, skipStroke: true });
+          const otherRect = child.getClientRect({ skipTransform: false, skipStroke: true, skipShadow: true });
           if (checkIntersection(nodeRect, otherRect)) {
             hasCollision = true;
             break;
@@ -541,15 +535,11 @@ export const SpaceMapScreen = () => {
     }
   };
 
-  /**
-   * @Function: handleDragEnd
-   * @Description: Chạy khi thả chuột. Nếu đang va chạm thì trả object về vị trí cũ,
-   *   ngược lại snap toạ độ về đúng lưới và lưu vị trí mới vào state.
-   */
   const handleDragEnd = (e: any, id: number | string, isZone: boolean) => {
     setCollidingNodeId(null);
     const node = e.target;
     if (node.getAttr('isColliding')) {
+      // Revert position
       const previousState = isZone ? zones.find(z => z.id === id) : gates.find(g => g.id === id);
       if (previousState) {
         node.position({ x: previousState.layoutX, y: previousState.layoutY });
@@ -570,77 +560,63 @@ export const SpaceMapScreen = () => {
     }
   };
 
-  /** @Description: Xoay 1 Zone thêm 90 độ mỗi lần bấm (0 -> 90 -> 180 -> 270 -> 0). */
   const handleRotateZone = (zoneId: number) => {
     setZones(prev => prev.map(z => z.id === zoneId ? { ...z, rotation: (z.rotation + 90) % 360 } : z));
+    // Note: A robust system would check collision AFTER rotation and revert if needed.
   };
 
-  /**
-   * @Function: findEmptyPosition
-   * @Description: Tìm ô lưới trống đầu tiên đủ chỗ cho 1 Zone/Gate mới (w x h).
-   * @Logic_Steps:
-   * 1. Gom bounding box (đã tính rotation) của mọi Zone/Gate đang hiển thị vào rects.
-   * 2. Quét lưới trái->phải, trên->dưới theo bước GRID_SIZE.
-   * 3. Tại mỗi ô, nếu không giao với rect nào -> trả về {x, y}.
-   * 4. Không còn chỗ -> trả về null.
-   */
   const findEmptyPosition = (w: number, h: number) => {
     const mapW = mapCols * GRID_SIZE;
     const mapH = mapRows * GRID_SIZE;
 
     const rects = [];
     for (const z of visibleZones) {
-       const { width: slotW, height: slotH } = getVehicleDimensions(z.vehicleTypeId, vehicleTypes);
-       let zw = z.capacity * slotW;
-       let zh = slotH;
-       if (z.rotation === 90 || z.rotation === 270) { zw = slotH; zh = z.capacity * slotW; }
+      const { width: slotW, height: slotH } = getVehicleDimensions(z.vehicleTypeId, vehicleTypes);
+      let zw = z.capacity * slotW;
+      let zh = slotH;
+      if (z.rotation === 90 || z.rotation === 270) { zw = slotH; zh = z.capacity * slotW; }
 
-       let zx = z.layoutX; let zy = z.layoutY;
-       if (z.rotation === 90) zx -= zw;
-       else if (z.rotation === 180) { zx -= zw; zy -= zh; }
-       else if (z.rotation === 270) zy -= zh;
+      let zx = z.layoutX; let zy = z.layoutY;
+      if (z.rotation === 90) zx -= zw;
+      else if (z.rotation === 180) { zx -= zw; zy -= zh; }
+      else if (z.rotation === 270) zy -= zh;
 
-       rects.push({ x: zx, y: zy, width: zw, height: zh });
+      rects.push({ x: zx, y: zy, width: zw, height: zh });
     }
     for (const g of visibleGates) {
-       let gw = 3 * GRID_SIZE;
-       let gh = GRID_SIZE;
-       if (g.vehicleTypeId) {
-           const vt = vehicleTypes.find(v => v.id === g.vehicleTypeId);
-           if (vt) gw = vt.matrixWidth * GRID_SIZE;
-       }
-       if (g.rotation === 90 || g.rotation === 270) {
-           const temp = gw; gw = gh; gh = temp;
-       }
-       let gx = g.layoutX; let gy = g.layoutY;
-       if (g.rotation === 90) gx -= gw;
-       else if (g.rotation === 180) { gx -= gw; gy -= gh; }
-       else if (g.rotation === 270) gy -= gh;
-       rects.push({ x: gx, y: gy, width: gw, height: gh });
+      let gw = 3 * GRID_SIZE;
+      let gh = GRID_SIZE;
+      if (g.vehicleTypeId) {
+        const vt = vehicleTypes.find(v => v.id === g.vehicleTypeId);
+        if (vt) gw = vt.matrixWidth * GRID_SIZE;
+      }
+      if (g.rotation === 90 || g.rotation === 270) {
+        const temp = gw; gw = gh; gh = temp;
+      }
+      let gx = g.layoutX; let gy = g.layoutY;
+      if (g.rotation === 90) gx -= gw;
+      else if (g.rotation === 180) { gx -= gw; gy -= gh; }
+      else if (g.rotation === 270) gy -= gh;
+      rects.push({ x: gx, y: gy, width: gw, height: gh });
     }
 
     for (let y = 0; y <= mapH - h; y += GRID_SIZE) {
       for (let x = 0; x <= mapW - w; x += GRID_SIZE) {
-         const newRect = { x, y, width: w, height: h };
-         let collision = false;
-         for (const r of rects) {
-           if (!(r.x >= newRect.x + newRect.width || r.x + r.width <= newRect.x ||
-                 r.y >= newRect.y + newRect.height || r.y + r.height <= newRect.y)) {
-              collision = true;
-              break;
-           }
-         }
-         if (!collision) return { x, y };
+        const newRect = { x, y, width: w, height: h };
+        let collision = false;
+        for (const r of rects) {
+          if (!(r.x >= newRect.x + newRect.width || r.x + r.width <= newRect.x ||
+            r.y >= newRect.y + newRect.height || r.y + r.height <= newRect.y)) {
+            collision = true;
+            break;
+          }
+        }
+        if (!collision) return { x, y };
       }
     }
     return null;
   };
 
-  /**
-   * @Function: handleAddZone
-   * @Description: Tạo Zone mới 5 chỗ đỗ, dùng loại xe đầu tiên hợp với tầng đang
-   *   chọn, tự tìm vị trí trống. Báo lỗi nếu không có loại xe phù hợp hoặc map đầy.
-   */
   const handleAddZone = () => {
     const activeFloor = floors.find(f => f.id === selectedFloorId);
     const validVehicleTypes = vehicleTypes.filter(v => v.category === activeFloor?.type);
@@ -671,7 +647,7 @@ export const SpaceMapScreen = () => {
       layoutX: pos.x,
       layoutY: pos.y,
       rotation: 0,
-      slots: Array.from({length: capacity}).map((_, i) => ({ id: `${Date.now()}${i}`, name: `N${i+1}`, status: 'EMPTY' }))
+      slots: Array.from({ length: capacity }).map((_, i) => ({ id: `${Date.now()}${i}`, name: `N${i + 1}`, status: 'EMPTY' }))
     };
 
     setZones(prev => [...prev, newZone]);
@@ -679,7 +655,6 @@ export const SpaceMapScreen = () => {
     if (!expandedKeys.includes('2')) setExpandedKeys(prev => [...prev, '2']);
   };
 
-  /** @Description: Như handleAddZone nhưng tạo Gate (cổng ra/vào), kích thước mặc định 3x1 ô khi chưa gán loại xe. */
   const handleAddGate = () => {
     const pos = findEmptyPosition(3 * GRID_SIZE, GRID_SIZE);
     if (!pos) {
@@ -704,11 +679,6 @@ export const SpaceMapScreen = () => {
     if (!expandedKeys.includes('4')) setExpandedKeys(prev => [...prev, '4']);
   };
 
-  /**
-   * @Function: handleUpdateZoneCapacity
-   * @Description: Đổi số chỗ đỗ của Zone. Tăng thì thêm slot trống ở cuối; giảm thì
-   *   cắt bớt ở cuối (LIFO) nhưng chặn nếu slot bị cắt đang có xe.
-   */
   const handleUpdateZoneCapacity = (zoneId: number, newCapacity: number) => {
     setZones(prev => prev.map(z => {
       if (z.id !== zoneId) return z;
@@ -717,14 +687,16 @@ export const SpaceMapScreen = () => {
       let newSlots = [...z.slots];
       if (newCapacity > z.capacity) {
         for (let i = z.capacity; i < newCapacity; i++) {
-          newSlots.push({ id: `${Date.now()}${i}`, name: `S${i+1}`, status: 'EMPTY' });
+          newSlots.push({ id: `${Date.now()}${i}`, name: `S${i + 1}`, status: 'EMPTY' });
         }
       } else {
+        // Reduce slots (LIFO)
+        // Check if any removed slot is occupied
         const removedSlots = newSlots.slice(newCapacity);
         const hasOccupied = removedSlots.some(s => s.status !== 'EMPTY');
         if (hasOccupied) {
           message.error('Can\'t cut it! The cut off spaces are currently parked');
-          return z;
+          return z; // Abort
         }
         newSlots = newSlots.slice(0, newCapacity);
       }
@@ -732,12 +704,8 @@ export const SpaceMapScreen = () => {
     }));
   };
 
-  /**
-   * @Function: handleToggleSlotStatus
-   * @Description: Bật/tắt chế độ bảo trì (DISABLED) cho 1 slot. Chặn từ client nếu
-   *   slot đang có xe (OCCUPIED), gọi API rồi cập nhật state ngay để UI phản hồi nhanh.
-   */
   const handleToggleSlotStatus = async (zoneId: number, slotId: string, newStatus: 'EMPTY' | 'DISABLED') => {
+    // Check local first for prompt UI feedback if OCCUPIED
     const zone = zones.find(z => z.id === zoneId);
     const slot = zone?.slots.find(s => s.id === slotId);
     if (slot && slot.status === 'OCCUPIED') {
@@ -747,6 +715,8 @@ export const SpaceMapScreen = () => {
 
     try {
       await axiosClient.put(`/infrastructure/slots/${slotId}/status`, { status: newStatus });
+      // The websocket will broadcast map-updates, and the map will automatically sync.
+      // But we can also update local state instantly for better UX
       setZones(prev => prev.map(z => {
         if (z.id !== zoneId) return z;
         return {
@@ -754,128 +724,105 @@ export const SpaceMapScreen = () => {
           slots: z.slots.map(s => s.id === slotId ? { ...s, status: newStatus } : s)
         };
       }));
-      message.success(`Status updated successfully!`);
+      message.success(`Updated Status in Success box!`);
     } catch (err: any) {
       message.error(err.response?.data?.message || 'Error when updating cell Status');
     }
   };
 
-  /**
-   * @Function: handleGateCommand
-   * @Description: Gửi lệnh điều khiển tới 1 Gate. Nếu cổng đang IDLE thì áp dụng
-   *   ngay; nếu đang bận thì đánh dấu pendingCommand kèm cảnh báo khẩn cho nhân viên.
-   */
-  const handleGateCommand = async (gateId: string | number, cmd: string) => {
-    const gate = gates.find(g => g.id === gateId);
-    if (!gate) return;
-
-    try {
-      await axiosClient.post(`/infrastructure/gates/${gateId}/command`, { command: cmd });
-
-      if (gate.status === 'IDLE') {
-        message.success(`Applied command ${cmd} immediately to ${gate.name}`);
-      } else {
-        setGates(prev => prev.map(g => g.id === gateId ? { ...g, pendingCommand: cmd } : g));
-        notification.error({
-          message: 'PENDING ORDER SENT (CRITICAL)',
-          description: `Sent command ${cmd} to device/staff at gate.`,
-          duration: 8,
-          placement: 'bottomRight'
-        });
-      }
-    } catch (error) {
-      message.error('Error when sending gate control command');
-    }
-  };
-
-  /** @Description: Huỷ lệnh điều khiển đang chờ xử lý tại 1 Gate. */
-  const handleCancelGateCommand = (gateId: string | number) => {
-    setGates(prev => prev.map(g => g.id === gateId ? { ...g, pendingCommand: null } : g));
-    message.info('Pending order canceled');
-  };
-
-  /**
-   * @Function: handleSave
-   * @Description: Lưu toàn bộ cấu hình bản đồ lên server, tự validate va chạm + biên
-   *   cho TẤT CẢ các tầng trước khi gửi (không chỉ tầng đang xem).
-   * @Logic_Steps:
-   * 1. Với mỗi tầng: dựng rects bounding box (đã tính rotation) cho Zone và Gate.
-   * 2. Với mỗi rect: nếu vượt biên tầng -> báo lỗi, dừng.
-   * 3. So từng cặp rect, nếu giao nhau -> báo lỗi va chạm, dừng.
-   * 4. POST payload (bỏ vehicleTypes), thành công thì refetch và chỉnh selectedFloorId nếu tầng đã mất.
-   */
   const handleSave = () => {
-    for (const floor of floors) {
-      const floorZones = zones.filter(z => z.floorId === floor.id);
-      const floorGates = gates.filter(g => g.floorId === floor.id);
-      const rects: any[] = [];
+    // Validate unique zone names
+    const zoneNames = new Set<string>();
+    for (const zone of zones) {
+      if (zone.capacity === 0) continue;
+      const name = (zone.name || '').trim().toLowerCase();
+      if (!name) {
+        message.error(`Zone name cannot be empty!`);
+        return;
+      }
+      if (zoneNames.has(name)) {
+        message.error(`Zone name must be unique: ${zone.name}`);
+        return;
+      }
+      zoneNames.add(name);
+    }
 
-      for (const z of floorZones) {
-         const { width: slotW, height: slotH } = getVehicleDimensions(z.vehicleTypeId, vehicleTypes);
-         let zw = z.capacity * slotW;
-         let zh = slotH;
-         if (z.rotation === 90 || z.rotation === 270) { zw = slotH; zh = z.capacity * slotW; }
+    // Validate bounds and overlaps
+    for (const zone of zones) {
+      const activeFloor = floors.find(f => f.id === zone.floorId);
+      if (!activeFloor) continue;
+      const floorW = (activeFloor.mapCols || 60) * GRID_SIZE;
+      const floorH = (activeFloor.mapRows || 40) * GRID_SIZE;
+      
+      const { width: slotW, height: slotH } = getVehicleDimensions(zone.vehicleTypeId, vehicleTypes);
+      let zw = zone.capacity * slotW;
+      let zh = slotH;
+      if (zone.rotation === 90 || zone.rotation === 270) { zw = slotH; zh = zone.capacity * slotW; }
 
-         let zx = z.layoutX; let zy = z.layoutY;
-         if (z.rotation === 90) zx -= zw;
-         else if (z.rotation === 180) { zx -= zw; zy -= zh; }
-         else if (z.rotation === 270) zy -= zh;
+      let zx = zone.layoutX; let zy = zone.layoutY;
+      if (zone.rotation === 90) zx -= zw;
+      else if (zone.rotation === 180) { zx -= zw; zy -= zh; }
+      else if (zone.rotation === 270) zy -= zh;
 
-         rects.push({ id: `Z-${z.id}`, name: z.name, x: zx, y: zy, width: zw, height: zh });
+      if (zx < 0 || zy < 0 || zx + zw > floorW || zy + zh > floorH) {
+        message.error(`Zone ${zone.name} is placed outside the map boundaries!`);
+        return;
       }
 
-      for (const g of floorGates) {
-         let gw = 3 * GRID_SIZE;
-         let gh = GRID_SIZE;
-         if (g.vehicleTypeId) {
-             const vt = vehicleTypes.find(v => v.id === g.vehicleTypeId);
-             if (vt) gw = vt.matrixWidth * GRID_SIZE;
-         }
-         if (g.rotation === 90 || g.rotation === 270) {
-             const temp = gw; gw = gh; gh = temp;
-         }
-         let gx = g.layoutX; let gy = g.layoutY;
-         if (g.rotation === 90) gx -= gw;
-         else if (g.rotation === 180) { gx -= gw; gy -= gh; }
-         else if (g.rotation === 270) gy -= gh;
-
-         rects.push({ id: `G-${g.id}`, name: g.name, x: gx, y: gy, width: gw, height: gh });
+      for (const other of zones) {
+        if (zone.id === other.id || zone.floorId !== other.floorId) continue;
+        const { width: oSlotW, height: oSlotH } = getVehicleDimensions(other.vehicleTypeId, vehicleTypes);
+        let ow = other.capacity * oSlotW;
+        let oh = oSlotH;
+        if (other.rotation === 90 || other.rotation === 270) { ow = oSlotH; oh = other.capacity * oSlotW; }
+        
+        let ox = other.layoutX; let oy = other.layoutY;
+        if (other.rotation === 90) ox -= ow;
+        else if (other.rotation === 180) { ox -= ow; oy -= oh; }
+        else if (other.rotation === 270) oy -= oh;
+        
+        if (!(zx >= ox + ow || zx + zw <= ox || zy >= oy + oh || zy + zh <= oy)) {
+          message.error(`Zone ${zone.name} overlaps with Zone ${other.name}!`);
+          return;
+        }
       }
 
-      for (let i = 0; i < rects.length; i++) {
-        const r1 = rects[i];
-
-        if (r1.x < 0 || r1.y < 0 ||
-            r1.x + r1.width > floor.mapCols * GRID_SIZE ||
-            r1.y + r1.height > floor.mapRows * GRID_SIZE) {
-           message.error(`Cannot save! ${r1.name} on ${floor.name} exceeds map boundaries.`);
-           return;
+      for (const gate of gates) {
+        if (gate.floorId !== zone.floorId) continue;
+        let gw = 3 * GRID_SIZE;
+        let gh = GRID_SIZE;
+        if (gate.vehicleTypeId) {
+          const vt = vehicleTypes.find(v => v.id === gate.vehicleTypeId);
+          if (vt) gw = vt.matrixWidth * GRID_SIZE;
+        }
+        if (gate.rotation === 90 || gate.rotation === 270) {
+          const temp = gw; gw = gh; gh = temp;
         }
 
-        for (let j = i + 1; j < rects.length; j++) {
-           const r2 = rects[j];
-           if (!(r2.x >= r1.x + r1.width ||
-                 r2.x + r2.width <= r1.x ||
-                 r2.y >= r1.y + r1.height ||
-                 r2.y + r2.height <= r1.y)) {
-              message.error(`Cannot save! Collision detected on ${floor.name} between ${r1.name} and ${r2.name}.`);
-              return;
-            }
+        let gx = gate.layoutX; let gy = gate.layoutY;
+        if (gate.rotation === 90) gx -= gw;
+        else if (gate.rotation === 180) { gx -= gw; gy -= gh; }
+        else if (gate.rotation === 270) gy -= gh;
+
+        if (!(zx >= gx + gw || zx + zw <= gx || zy >= gy + gh || zy + zh <= gy)) {
+          message.error(`Zone ${zone.name} overlaps with Gate ${gate.name}!`);
+          return;
         }
       }
     }
 
-    const payload = { floors, zones, gates, vehicleTypes: undefined };
+    const payload = { floors, zones, gates, vehicleTypes: undefined }; // don't send vehicleTypes back
 
     axiosClient.post('/infrastructure/map/save', payload)
       .then(res => {
         message.success('Success! control center and diagram configuration saved!');
+        setInitialMapState(getComparableMapState(floors, zones, gates));
         refetch().then((result) => {
           const fetchedData = result.data;
           if (fetchedData && fetchedData.floors && fetchedData.floors.length > 0) {
             const stillExists = fetchedData.floors.find((f: any) => f.id === selectedFloorId);
             if (!stillExists) {
-               setSelectedFloorId(fetchedData.floors[fetchedData.floors.length - 1].id);
+              setSelectedFloorId(fetchedData.floors[fetchedData.floors.length - 1].id);
             }
           }
         });
@@ -885,7 +832,7 @@ export const SpaceMapScreen = () => {
       });
   };
 
-  /** @Description: Vẽ nền, lưới và viền bao quanh bản đồ. */
+  // -- Render Helpers --
   const drawGrid = () => {
     const lines = [];
     const width = mapCols * GRID_SIZE;
@@ -904,14 +851,40 @@ export const SpaceMapScreen = () => {
     return lines;
   };
 
+  // Get current selected data for Inspector
   const activeZone = selectedEntity?.type === 'ZONE' || selectedEntity?.type === 'SLOT' ? zones.find(z => z.id === (selectedEntity as any).zoneId || z.id === (selectedEntity as any).id) : null;
   const activeSlot = selectedEntity?.type === 'SLOT' ? activeZone?.slots.find(s => s.id === selectedEntity.slotId) : null;
   const activeGate = selectedEntity?.type === 'GATE' ? gates.find(g => g.id === (selectedEntity as any).id) : null;
   const validVehicleTypes = vehicleTypes.filter(v => v.category === activeFloor?.type);
 
+  /**
+   * ============================================================================
+   * [GIAO DIỆN CHÍNH CỦA SPACE MAP SCREEN - RENDER PANEL]
+   * ============================================================================
+   * Bao gồm 2 không gian chính được phân chia cột rõ ràng:
+   * 1. KHÔNG GIAN BÊN TRÁI (75% - CANVAS WORKSPACE):
+   *    - Vùng vẽ bản đồ 2D Konva.js (Stage & Layer).
+   *    - Lưới tọa độ Grid (GRID_SIZE = 50px).
+   *    - Hiển thị các khối Khu vực (Zone), ô đỗ (Slot) và Cổng (Gate).
+   *    - Hỗ trợ cuộn chuột zoom/pan và kéo/thả đối tượng.
+   * 2. CỘT THUỘC TÍNH BÊN PHẢI (25% - RIGHT INSPECTOR PANEL):
+   *    - Cụm điều hướng & chọn tầng bãi đỗ.
+   *    - Inspector chỉnh sửa thuộc tính cho Zone, Slot, Gate đang chọn.
+   *    - Cụm nút thao tác LƯU CẤU HÌNH và đồng bộ trạng thái về Backend.
+   * ============================================================================
+   */
   return (
     <div className="flex h-full w-full bg-slate-50 overflow-hidden font-sans">
 
+      {/* 
+       * ============================================================================
+       * [KHÔNG GIAN TRÁI - 75%] CANVAS WORKSPACE - BẢN ĐỒ KHÔNG GIAN 2D
+       * ============================================================================
+       * - Konva Stage: Xử lý sự kiện kéo (draggable), phóng to/thu nhỏ (scale/wheel).
+       * - Grid Layer: Lưới tọa độ dạng ô vuông 50px hỗ trợ căn chỉnh chuẩn xác.
+       * - Entity Layer: Vẽ và tương tác với các khối Zone, Slot (màu theo status) và Gate.
+       * ============================================================================
+       */}
       <div className="flex-1 relative cursor-grab active:cursor-grabbing bg-gray-200" ref={containerRef}>
         {containerSize.width > 0 && containerSize.height > 0 && (
           <Stage
@@ -926,10 +899,10 @@ export const SpaceMapScreen = () => {
               e.evt.preventDefault();
               const scaleBy = 1.05;
               const stage = e.target.getStage();
-              if(!stage) return;
+              if (!stage) return;
               const oldScale = stage.scaleX();
               const pointer = stage.getPointerPosition();
-              if(!pointer) return;
+              if (!pointer) return;
 
               const mousePointTo = {
                 x: (pointer.x - stage.x()) / oldScale,
@@ -957,6 +930,7 @@ export const SpaceMapScreen = () => {
             </Layer>
 
             <Layer>
+              {/* Draw Zones & Slots */}
               {visibleZones.map((zone) => {
                 const { width: slotW, height: slotH } = getVehicleDimensions(zone.vehicleTypeId, vehicleTypes);
                 const isZoneSelected = selectedEntity?.type === 'ZONE' && (selectedEntity as any).id === zone.id;
@@ -977,25 +951,27 @@ export const SpaceMapScreen = () => {
                     onDragMove={(e) => handleDragMove(e, zone.id, true)}
                     onDragEnd={(e) => handleDragEnd(e, zone.id, true)}
                   >
+                    {/* Zone Bounding Box */}
                     <Rect
                       width={zoneW} height={zoneH}
                       fill={isZoneSelected ? 'rgba(59, 130, 246, 0.15)' : (zone.functionType === 'WALK_IN' ? 'rgba(186, 230, 253, 0.4)' : zone.functionType === 'MONTHLY' ? 'rgba(167, 243, 208, 0.4)' : 'rgba(241, 245, 249, 0.6)')}
                       stroke={collidingNodeId === String(zone.id) ? '#ef4444' : (isZoneSelected ? '#3b82f6' : '#64748b')}
                       strokeWidth={isZoneSelected ? 3 : 2}
                       dash={collidingNodeId === String(zone.id) ? [10, 5] : []}
-                      onClick={(e) => { e.cancelBubble = true; setSelectedEntity({ type: 'ZONE', id: zone.id }); if(!expandedKeys.includes('2')) setExpandedKeys(p => [...p, '2']); }}
+                      onClick={(e) => { e.cancelBubble = true; setSelectedEntity({ type: 'ZONE', id: zone.id }); if (!expandedKeys.includes('2')) setExpandedKeys(p => [...p, '2']); }}
                       onTap={(e) => { e.cancelBubble = true; setSelectedEntity({ type: 'ZONE', id: zone.id }); }}
                     />
 
+                    {/* Slots within Zone */}
                     {zone.slots.map((slot, i) => {
                       const xPos = i * slotW;
                       const isThisSlotSelected = selectedEntity?.type === 'SLOT' && selectedEntity.slotId === slot.id;
 
                       let slotFill = 'transparent';
-                      if (slot.status === 'OCCUPIED') slotFill = '#fecaca';
-                      else if (slot.status === 'DISABLED') slotFill = '#f1f5f9';
-                      else if (slot.status === 'EMPTY' && isThisSlotSelected) slotFill = '#eff6ff';
-                      else slotFill = 'transparent';
+                      if (slot.status === 'OCCUPIED') slotFill = '#fecaca'; // Match Staff Screen
+                      else if (slot.status === 'DISABLED') slotFill = '#f1f5f9'; // Gray
+                      else if (slot.status === 'EMPTY' && isThisSlotSelected) slotFill = '#eff6ff'; // Light blue highlight
+                      else slotFill = 'transparent'; // Match Staff Screen
 
                       let vtIconUrl = '';
                       if (vehicleTypes) {
@@ -1012,10 +988,10 @@ export const SpaceMapScreen = () => {
                             e.cancelBubble = true;
                             if (isZoneSelected) {
                               setSelectedEntity({ type: 'SLOT', zoneId: zone.id, slotId: slot.id });
-                              if(!expandedKeys.includes('3')) setExpandedKeys(p => [...p, '3']);
+                              if (!expandedKeys.includes('3')) setExpandedKeys(p => [...p, '3']);
                             } else {
                               setSelectedEntity({ type: 'ZONE', id: zone.id });
-                              if(!expandedKeys.includes('2')) setExpandedKeys(p => [...p, '2']);
+                              if (!expandedKeys.includes('2')) setExpandedKeys(p => [...p, '2']);
                             }
                           }}
                         >
@@ -1025,6 +1001,7 @@ export const SpaceMapScreen = () => {
                             stroke={isThisSlotSelected ? '#2563eb' : '#94a3b8'}
                             strokeWidth={isThisSlotSelected ? 3 : 2}
                           />
+                          {/* Disabled Crosshatch pattern mock using lines */}
                           {slot.status === 'DISABLED' && (
                             <Line points={[0, 0, slotW, slotH]} stroke="#cbd5e1" strokeWidth={2} listening={false} />
                           )}
@@ -1069,8 +1046,9 @@ export const SpaceMapScreen = () => {
                       );
                     })}
 
+                    {/* Zone Name Top-Left (Inside) */}
                     <Label x={5} y={5} listening={false}>
-                      <Tag fill="rgba(255, 255, 255, 0.95)" cornerRadius={6} shadowColor="black" shadowBlur={4} shadowOpacity={0.15} shadowOffset={{x:0, y:2}} />
+                      <Tag fill="rgba(255, 255, 255, 0.95)" cornerRadius={6} shadowColor="black" shadowBlur={4} shadowOpacity={0.15} shadowOffset={{ x: 0, y: 2 }} />
                       <KonvaText
                         text={`${zone.name} ${zone.activeReservationsCount ? `(Res: ${zone.activeReservationsCount})` : ''}`}
                         fontSize={18}
@@ -1084,6 +1062,7 @@ export const SpaceMapScreen = () => {
                 );
               })}
 
+              {/* Draw Gates */}
               {visibleGates.map((gate) => {
                 let gateW = 3 * GRID_SIZE;
                 const gateH = GRID_SIZE;
@@ -1092,7 +1071,7 @@ export const SpaceMapScreen = () => {
                   if (vt) gateW = vt.matrixWidth * GRID_SIZE;
                 }
                 const isSelected = selectedEntity?.type === 'GATE' && (selectedEntity as any).id === gate.id;
-                const gateColor = gate.status === 'ACTIVE' ? '#059669' : '#94a3b8';
+                const gateColor = gate.status === 'OCCUPIED' ? '#059669' : '#94a3b8'; // emerald if OCCUPIED, slate if IDLE
 
                 return (
                   <Group
@@ -1107,7 +1086,7 @@ export const SpaceMapScreen = () => {
                     onClick={(e) => {
                       e.cancelBubble = true;
                       setSelectedEntity({ type: 'GATE', id: gate.id });
-                      if(!expandedKeys.includes('4')) setExpandedKeys(p => [...p, '4']);
+                      if (!expandedKeys.includes('4')) setExpandedKeys(p => [...p, '4']);
                     }}
                   >
                     <Rect
@@ -1120,7 +1099,7 @@ export const SpaceMapScreen = () => {
                       shadowColor="black"
                       shadowBlur={6}
                       shadowOpacity={0.3}
-                      shadowOffset={{x: 0, y: 3}}
+                      shadowOffset={{ x: 0, y: 3 }}
                     />
                     <KonvaText
                       x={0} y={gateH / 2 - 6}
@@ -1132,9 +1111,6 @@ export const SpaceMapScreen = () => {
                       fill="#ffffff"
                       listening={false}
                     />
-                    {gate.pendingCommand && (
-                       <KonvaText x={0} y={-15} text="⚠️ PENDING" fill="#ef4444" fontSize={12} fontStyle="bold" listening={false} />
-                    )}
                   </Group>
                 );
               })}
@@ -1143,14 +1119,24 @@ export const SpaceMapScreen = () => {
         )}
       </div>
 
+      {/* 
+       * ============================================================================
+       * [KHÔNG GIAN PHẢI - 25%] RIGHT INSPECTOR PANEL - BẢNG QUẢN TRỊ THUỘC TÍNH
+       * ============================================================================
+       * Chứa các công cụ điều hướng, chuyển đổi Tầng, và chỉnh sửa thông số cho
+       * từng loại Entity (Zone / Slot / Gate) được bấm chọn từ sơ đồ bên trái.
+       * ============================================================================
+       */}
       <div className="w-80 border-l border-gray-200 bg-white flex flex-col h-full shadow-[-4px_0_15px_rgba(0,0,0,0.05)] z-10 shrink-0">
 
+        {/* Header */}
         <div className="px-4 py-3 border-b border-gray-100 bg-slate-50 flex items-center justify-between shrink-0">
           <Title level={5} className="m-0 text-slate-800 flex items-center">
             <CompassOutlined className="mr-2 text-blue-600" />  Configuration Bar
-                                </Title>
+          </Title>
         </div>
 
+        {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-track]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-gray-400">
           <Collapse
             ghost
@@ -1159,16 +1145,23 @@ export const SpaceMapScreen = () => {
             onChange={(keys) => setExpandedKeys(keys as string[])}
             className="bg-white"
           >
-            <Panel header={<Text strong>0. Vision & Navigation</Text>} key="0" className="border-b border-gray-100">
-              <Button size="small" block icon={<AimOutlined />} className="mb-3" onClick={() => handleZoomToBox(0, 0, mapCols*GRID_SIZE, mapRows*GRID_SIZE)}>
+            {/* 
+             * ============================================================================
+             * [INSPECTOR 0] VISION & NAVIGATION - ĐIỀU HƯỚNG BẢN ĐỒ
+             * ============================================================================
+             * Cho phép zoom toàn cảnh (Panoramic Zoom) hoặc nhảy camera đến từng Zone.
+             * ============================================================================
+             */}
+            <Panel header={<Text strong>0e Vision & Navigation</Text>} key="0" className="border-b border-gray-100">
+              <Button size="small" block icon={<AimOutlined />} className="mb-3" onClick={() => handleZoomToBox(0, 0, mapCols * GRID_SIZE, mapRows * GRID_SIZE)}>
 
-                                              Panoramic Zoom
-                                            </Button>
+                Panoramic Zoom
+              </Button>
               <Text type="secondary" className="text-xs mb-1 block">Go to Zone:</Text>
               <Select
                 size="small"
                 className="w-full"
-                placeholder="Select Zone"
+                placeholder="Select Zoneeee"
                 onChange={handleZoomZone}
                 value={selectedEntity?.type === 'ZONE' ? (selectedEntity as any).id : undefined}
               >
@@ -1176,6 +1169,15 @@ export const SpaceMapScreen = () => {
               </Select>
             </Panel>
 
+            {/* 
+             * ============================================================================
+             * [INSPECTOR 1] MANAGEMENT FLOOR - THIẾT LẬP THÔNG SỐ TẦNG BÃI XE
+             * ============================================================================
+             * Chuyển đổi giữa các Tầng (Floors), thêm Tầng mới, hoặc thay đổi kích
+             * thước lưới ma trận (mapCols, mapRows) cũng như giới hạn loại phương
+             * tiện được đỗ ở tầng này (FOUR_WHEEL / TWO_WHEEL).
+             * ============================================================================
+             */}
             <Panel header={<Text strong>1. Management Floor (Floor)</Text>} key="1" className="border-b border-gray-100 bg-slate-50/50">
               <div className="space-y-3">
                 <div className="flex items-center space-x-2">
@@ -1193,6 +1195,33 @@ export const SpaceMapScreen = () => {
                       setFloors(prev => [...prev, { id: newId, name: `New Floor`, type: 'FOUR_WHEEL', mapCols: 60, mapRows: 40 }]);
                       setSelectedFloorId(newId);
                     }}>More</Button>
+                    <Button size="small" danger icon={<DeleteOutlined />} onClick={() => {
+                      if (floors.length <= 1) {
+                        message.warning('Must have at least one floor!');
+                        return;
+                      }
+                      const hasZones = zones.some(z => z.floorId === selectedFloorId);
+                      const hasGates = gates.some(g => g.floorId === selectedFloorId);
+                      if (hasZones || hasGates) {
+                        message.error('Please delete all Zones and Gates on this floor before deleting the floor!');
+                        return;
+                      }
+                      
+                      Modal.confirm({
+                        title: 'Delete this floor?',
+                        content: 'This floor and all unsaved data on it will be removed from the UI. You need to click Save to apply these changes. Are you sure?',
+                        okText: 'Delete',
+                        okType: 'danger',
+                        cancelText: 'Cancel',
+                        onOk: () => {
+                          const newFloors = floors.filter(f => f.id !== selectedFloorId);
+                          setFloors(newFloors);
+                          setSelectedFloorId(newFloors[0].id);
+                          setZones(prev => prev.filter(z => z.floorId !== selectedFloorId));
+                          setGates(prev => prev.filter(g => g.floorId !== selectedFloorId));
+                        }
+                      });
+                    }} />
                     <Button size="small" type="primary" icon={<SaveOutlined />} onClick={handleSave}>
                       Save Floor
                     </Button>
@@ -1209,32 +1238,40 @@ export const SpaceMapScreen = () => {
                       />
                     </div>
                     <div>
-                    <Text className="text-xs text-gray-500 block mb-1">Floor characteristics (Limited to vehicle type):</Text>
-                    <Select
-                      size="small"
-                      value={floors.find(f => f.id === selectedFloorId)?.type}
-                      className="w-full"
-                      onChange={(v) => {
-                         setFloors(prev => prev.map(f => f.id === selectedFloorId ? { ...f, type: v as 'FOUR_WHEEL' | 'TWO_WHEEL' } : f));
-                      }}
-                    >
-                      <Select.Option value="FOUR_WHEEL">Floor Car (4 wheels)</Select.Option>
-                      <Select.Option value="TWO_WHEEL">Floor Motorcycle (2 wheels)</Select.Option>
-                    </Select>
-                  </div>
+                      <Text className="text-xs text-gray-500 block mb-1">Floor characteristics (Limited to vehicle type):</Text>
+                      <Select
+                        size="small"
+                        value={floors.find(f => f.id === selectedFloorId)?.type}
+                        className="w-full"
+                        onChange={(v) => {
+                          setFloors(prev => prev.map(f => f.id === selectedFloorId ? { ...f, type: v as 'FOUR_WHEEL' | 'TWO_WHEEL' } : f));
+                        }}
+                      >
+                        <Select.Option value="FOUR_WHEEL">Floor Car (4 wheels)</Select.Option>
+                        <Select.Option value="TWO_WHEEL">Floor Motorcycle (2 wheels)</Select.Option>
+                      </Select>
+                    </div>
                   </div>
                 )}
                 <div>
                   <Text className="text-xs text-gray-500 block mb-1">Matrix size (Cell):</Text>
                   <div className="flex items-center space-x-2">
-                    <InputNumber size="small" value={mapCols} onChange={v => v && handleUpdateMapSize(v, mapRows)} className="w-20" />
+                    <InputNumber size="small" min={1} max={999} value={mapCols} onChange={v => v && handleUpdateMapSize(v, mapRows)} className="w-20" />
                     <Text type="secondary">x</Text>
-                    <InputNumber size="small" value={mapRows} onChange={v => v && handleUpdateMapSize(mapCols, v)} className="w-20" />
+                    <InputNumber size="small" min={1} max={999} value={mapRows} onChange={v => v && handleUpdateMapSize(mapCols, v)} className="w-20" />
                   </div>
                 </div>
               </div>
             </Panel>
 
+            {/* 
+             * ============================================================================
+             * [INSPECTOR 2] PARKING ZONE - THIẾT LẬP THÔNG SỐ KHU VỰC (ZONE)
+             * ============================================================================
+             * Chỉnh sửa tên khu vực, góc xoay (0/90/180/270), chức năng (WALK_IN,
+             * MONTHLY, BACKUP), loại phương tiện và tổng sức chứa (capacity).
+             * ============================================================================
+             */}
             <Panel
               header={<div className="flex justify-between items-center w-full pr-4">
                 <Text strong>2. Parking Zone (Zone)</Text>
@@ -1252,7 +1289,7 @@ export const SpaceMapScreen = () => {
                         size="small"
                         variant="borderless"
                         className="font-bold text-blue-700 p-0"
-                        onChange={(e) => setZones(prev => prev.map(z => z.id === activeZone.id ? {...z, name: e.target.value} : z))}
+                        onChange={(e) => setZones(prev => prev.map(z => z.id === activeZone.id ? { ...z, name: e.target.value } : z))}
                       />
                     </Text>
                   </div>
@@ -1261,7 +1298,14 @@ export const SpaceMapScreen = () => {
                     <Text className="text-xs text-gray-500 block mb-1">Zone function:</Text>
                     <Select
                       size="small" className="w-full" value={activeZone.functionType}
-                      onChange={v => setZones(prev => prev.map(z => z.id === activeZone.id ? {...z, functionType: v} : z))}
+                      onChange={v => {
+                        const hasOccupied = activeZone.slots.some(s => s.status === 'OCCUPIED');
+                        if (hasOccupied) {
+                          message.error("Cannot change Zone function because there are vehicles parked in this Zone!");
+                          return;
+                        }
+                        setZones(prev => prev.map(z => z.id === activeZone.id ? { ...z, functionType: v } : z));
+                      }}
                     >
                       <Select.Option value="WALK_IN">Walk-in</Select.Option>
                       <Select.Option value="MONTHLY">Monthly Pass (Monthly)</Select.Option>
@@ -1273,13 +1317,20 @@ export const SpaceMapScreen = () => {
                     <Text className="text-xs text-gray-500 block mb-1">Vehicle Type:</Text>
                     <Select
                       size="small" className="w-full" value={activeZone.vehicleTypeId}
-                      onChange={v => setZones(prev => prev.map(z => z.id === activeZone.id ? {...z, vehicleTypeId: v} : z))}
+                      onChange={v => {
+                        const hasOccupied = activeZone.slots.some(s => s.status === 'OCCUPIED');
+                        if (hasOccupied) {
+                          message.error("Cannot change Vehicle Type because there are vehicles parked in this Zone!");
+                          return;
+                        }
+                        setZones(prev => prev.map(z => z.id === activeZone.id ? { ...z, vehicleTypeId: v } : z));
+                      }}
                     >
                       {validVehicleTypes.map(vt => (
-                          <Select.Option key={vt.id} value={vt.id}>
-                            {vt.iconUrl ? <img src={getImageUrl(vt.iconUrl)} style={{width: 16, height: 16, marginRight: 8, objectFit: 'contain', display: 'inline-block'}} /> : null}
-                            {vt.typeName}
-                          </Select.Option>
+                        <Select.Option key={vt.id} value={vt.id}>
+                          {vt.iconUrl ? <img src={getImageUrl(vt.iconUrl)} style={{ width: 16, height: 16, marginRight: 8, objectFit: 'contain', display: 'inline-block' }} /> : null}
+                          {vt.typeName}
+                        </Select.Option>
                       ))}
                     </Select>
                   </div>
@@ -1307,8 +1358,6 @@ export const SpaceMapScreen = () => {
                     />
                   </div>
 
-
-
                   <Button block icon={<SyncOutlined />} onClick={() => handleRotateZone(activeZone.id)}>
                     Xoay Zone 90°
                   </Button>
@@ -1316,12 +1365,21 @@ export const SpaceMapScreen = () => {
               ) : (
                 <div className="py-4 text-center text-gray-400 italic text-sm">
 
-                                                        Click on a Zone on the map to configure it
-                                                      </div>
+                  Click on a Zone on the map to configure it
+                </div>
               )}
             </Panel>
 
-            <Panel header={<Text strong>3. Single Slot (Slot)</Text>} key="3" className="border-b border-gray-100 bg-slate-50/50">
+            {/* 
+             * ============================================================================
+             * [INSPECTOR 3] SINGLE SLOT - GIÁM SÁT & BẢO TRÌ Ô ĐỖ (SLOT)
+             * ============================================================================
+             * Hiển thị trạng thái ô đỗ được chọn (EMPTY, OCCUPIED, DISABLED).
+             * Hỗ trợ bật/tắt chế độ Bảo trì (DISABLED) trực tiếp qua Switch, gọi
+             * API PUT /infrastructure/slots/{slotId}/status.
+             * ============================================================================
+             */}
+            <Panel header={<Text strong>3e Single Slot (Slot)</Text>} key="3" className="border-b border-gray-100 bg-slate-50/50">
               {activeSlot && activeZone ? (
                 <div className="space-y-3">
                   <div className="flex justify-between items-center p-2 bg-white border border-gray-200 rounded">
@@ -1338,27 +1396,37 @@ export const SpaceMapScreen = () => {
                   </div>
                   <Text type="secondary" className="text-xs italic block mt-1">
 
-                                                          * Turn off the switch to switch to Maintenance mode. Maintenance is not possible if the vehicle is in use
-                                                        </Text>
+                    * Turn off the switch to switch to Maintenance mode. Maintenance is not possible if the vehicle is in use
+                  </Text>
                 </div>
               ) : (
                 <div className="py-4 text-center text-gray-400 italic text-sm">
 
-                                                        Double click on a Slot to configure it separately
-                                                      </div>
+                  Double click on a Slot to configure it separately
+                </div>
               )}
             </Panel>
 
+            {/* 
+             * ============================================================================
+             * [INSPECTOR 4] GATE INFORMATION - TRẠNG THÁI & THAO TÁC CỔNG (GATE)
+             * ============================================================================
+             * Hiển thị thông tin Cổng được chọn trên đường viền bãi xe (ENTRY,
+             * EXIT, ENTRY_EXIT), trạng thái trực ca của nhân viên và cho phép xoá mềm Cổng.
+             * ============================================================================
+             */}
             <Panel
               header={<div className="flex justify-between items-center w-full pr-4">
-                <Text strong className={activeGate ? "text-amber-600" : ""}>4. Gate Information (Gate)</Text>
+                <Text strong className={activeGate ? "text-amber-600" : ""}>4e Gate Information (Gate)</Text>
                 <Button type="primary" size="small" icon={<PlusOutlined />} onClick={(e) => { e.stopPropagation(); handleAddGate(); }} />
               </div>}
               key="4"
             >
               {activeGate ? (
                 <div className="space-y-4">
-                  <div className={`p-3 rounded border ${activeGate.status === 'OCCUPIED' ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+                  {/* Màu nền khớp đúng quy ước của Gate trên bản đồ: xanh lá =
+                      đang có nhân viên trực (OCCUPIED), xám = trống. */}
+                  <div className={`p-3 rounded border ${activeGate.status === 'OCCUPIED' ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
                     <div className="flex items-center mb-1">
                       <GatewayOutlined className="mr-2 text-lg" />
                       <Input
@@ -1366,16 +1434,27 @@ export const SpaceMapScreen = () => {
                         size="small"
                         variant="borderless"
                         className="font-bold p-0"
-                        onChange={(e) => setGates(prev => prev.map(g => g.id === activeGate.id ? {...g, name: e.target.value} : g))}
+                        onChange={(e) => setGates(prev => prev.map(g => g.id === activeGate.id ? { ...g, name: e.target.value } : g))}
                       />
                     </div>
                     <Text className="text-xs block mt-2 text-gray-500">
 
-                                                                * Gate function (Enter/Exit) and Vehicle Type will be chosen by the Staff when closing the shift at this gate
-                                                              </Text>
+                      * Gate function (Enter/Exit) and Vehicle Type will be chosen by the Staff when closing the shift at this gate
+                    </Text>
                     <div className="mt-3">
-                      <Text className="text-xs block">Current status: <Text strong>{activeGate.status}</Text></Text>
-                      {activeGate.staffName && <Text className="text-xs block">Staff on duty: <Text strong>{activeGate.staffName}</Text></Text>}
+                      <Text className="text-xs block mb-1">
+                        Current status: <Text strong className={activeGate.status === 'OCCUPIED' ? 'text-amber-600' : 'text-emerald-600'}>{activeGate.status}</Text>
+                      </Text>
+                      <Text className="text-xs block mb-1">
+                        Function: <Text strong>{activeGate.type === 'ENTRY' ? 'Entry Only (ENTRY)' : activeGate.type === 'EXIT' ? 'Exit Only (EXIT)' : 'Flexible Entry/Exit'}</Text>
+                      </Text>
+                      {activeGate.staffName ? (
+                        <Text className="text-xs block text-blue-600">Staff on duty: <Text strong>{activeGate.staffName}</Text></Text>
+                      ) : (
+                        <div className="bg-gray-50 p-2 rounded border border-gray-200 text-center">
+                          <Text className="text-xs text-gray-400 italic">Empty (Shift not opened)</Text>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1402,13 +1481,23 @@ export const SpaceMapScreen = () => {
               ) : (
                 <div className="py-4 text-center text-gray-400 italic text-sm">
 
-                                                        Click on the Gate icon on the map border to operate
-                                                      </div>
+                  Click on the Gate icon on the map border to operate
+                </div>
               )}
             </Panel>
+
           </Collapse>
         </div>
 
+        {/* 
+         * ============================================================================
+         * [BOTTOM ACTION BAR] THANH CÔNG CỤ LƯU CẤU HÌNH (SAVE CONFIGURATION)
+         * ============================================================================
+         * Nút Lưu sáng lên khi `isDirty === true` (có thay đổi tọa độ, số lượng ô đỗ,
+         * kích thước lưới hoặc cấu trúc tầng so với dữ liệu gốc).
+         * Gọi POST `/infrastructure/map/save` đồng bộ xuống DB 3NF.
+         * ============================================================================
+         */}
         <div className="p-4 border-t border-gray-200 bg-white shrink-0 shadow-[0_-4px_15px_rgba(0,0,0,0.05)]">
           <Button
             type="primary"
@@ -1420,8 +1509,8 @@ export const SpaceMapScreen = () => {
             className="bg-blue-600 hover:bg-blue-700 h-12 text-base font-medium shadow-md"
           >
 
-                                  SAVE CONFIGURATION
-                                </Button>
+            SAVE CONFIGURATION
+          </Button>
         </div>
 
       </div>
